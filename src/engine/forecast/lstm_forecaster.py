@@ -99,8 +99,13 @@ class LSTMForecaster:
         history_df : timestamp, bus_id, load_mw 컬럼 포함 DataFrame (1시간 간격)
         test_split : 0.0 초과 시 시간 순서 기준 뒷부분을 테스트셋으로 분리.
         """
+        import random
         from sklearn.preprocessing import MinMaxScaler
         import tensorflow as tf
+
+        random.seed(42)
+        np.random.seed(42)
+        tf.random.set_seed(42)
 
         df = history_df.copy()
         df["timestamp"] = pd.to_datetime(df["timestamp"])
