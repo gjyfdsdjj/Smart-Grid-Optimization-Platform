@@ -1,16 +1,12 @@
 from __future__ import annotations
 from datetime import datetime
-from typing import Any
 
 import pandas as pd
 import streamlit as st
 
 from src.data.adapters.vworld_adapter import MapCapability, get_map_capability
 from src.data.schemas import (
-    MapOverlayLine,
-    MapOverlayPoint,
     MapOverlayResult,
-    MapOverlayRoute,
     ScenarioContext,
     ScoreBreakdown,
     SimulationResult,
@@ -18,6 +14,7 @@ from src.data.schemas import (
 from src.services.map_overlay_service import MapOverlayService
 from src.services.monitoring_service import MonitoringService
 from src.services.simulation_service import SimulationService
+from src.ui.map_overlay_renderer import render_map_overlay
 
 st.set_page_config(page_title="시뮬레이션 | SGOP", layout="wide")
 
@@ -49,14 +46,6 @@ def _get_shared_scenario() -> ScenarioContext:
 
 bus_options = sim_service.list_bus_options()
 candidate_options = sim_service.list_candidate_options()
-
-def get_congestion_color(status: str):
-    return {
-        "normal": "#22c55e",
-        "warning": "#eab308",
-        "critical": "#ef4444",
-        "overload": "#8b5cf6",
-    }.get(status, "#9ca3af")
 
 # --- 세션 상태(Session State) 초기화 ---
 if 'sim_run' not in st.session_state:
@@ -166,133 +155,16 @@ def _build_map_overlay(
         map_capability=map_capability,
     )
 
-def _load_map_libraries() -> tuple[Any | None, Any | None, str | None]:
-    try:
-        import folium
-        from streamlit_folium import st_folium
-
-        return folium, st_folium, None
-    except Exception as exc:  # noqa: BLE001
-        return None, None, str(exc)
-
-def _render_overlay_map(
-    overlay: MapOverlayResult,
-    *,
-    map_capability: MapCapability,
-) -> None:
-    folium, st_folium, import_error = _load_map_libraries()
-    if import_error is not None:
-        st.warning(f"지도 라이브러리 fallback: {import_error}")
-        _render_overlay_fallback_tables(overlay)
-        return
-
-    m = folium.Map(location=[36.5, 127.5], zoom_start=7, tiles=None, control_scale=True)
-    if map_capability.wmts_tile_url:
-        folium.TileLayer(
-            tiles=map_capability.wmts_tile_url,
-            attr="공간정보 오픈플랫폼(브이월드)",
-            name="VWorld 2.5D",
-            overlay=False,
-            control=True,
-        ).add_to(m)
-    else:
-        folium.TileLayer(
-            tiles="CartoDB positron",
-            name="Fallback 2D",
-            overlay=False,
-            control=True,
-        ).add_to(m)
-
-    for line in overlay.lines:
-        _add_overlay_line(folium, m, line)
-    for route in overlay.routes:
-        _add_overlay_route(folium, m, route)
-    for point in overlay.points:
-        _add_overlay_point(folium, m, point)
-
-    folium.LayerControl(collapsed=True).add_to(m)
-    st_folium(m, width=1200, height=650, returned_objects=[])
-
-def _add_overlay_line(folium: Any, folium_map: Any, line: MapOverlayLine) -> None:
-    folium.PolyLine(
-        locations=[
-            [line.from_point.latitude, line.from_point.longitude],
-            [line.to_point.latitude, line.to_point.longitude],
-        ],
-        color=get_congestion_color(line.status),
-        weight=4,
-        opacity=0.55,
-        tooltip=f"{line.label} | {line.status}",
-    ).add_to(folium_map)
-
-def _add_overlay_route(folium: Any, folium_map: Any, route: MapOverlayRoute) -> None:
-    route_coords = [[point.latitude, point.longitude] for point in route.points]
-    if len(route_coords) < 2:
-        return
-
-    folium.PolyLine(
-        locations=route_coords,
-        color="#2563eb" if route.rank == 1 else "#64748b",
-        weight=5 if route.rank == 1 else 3,
-        dash_array="10" if route.rank == 1 else None,
-        tooltip=route.label,
-        opacity=0.9 if route.rank == 1 else 0.45,
-    ).add_to(folium_map)
-
-def _add_overlay_point(folium: Any, folium_map: Any, point: MapOverlayPoint) -> None:
-    style = _point_style(point)
-    folium.CircleMarker(
-        location=[point.latitude, point.longitude],
-        radius=style["radius"],
-        popup=_point_popup_html(point),
-        tooltip=point.label,
-        color=style["color"],
-        fill=True,
-        fill_color=style["fill_color"],
-        fill_opacity=style["fill_opacity"],
-        weight=style["weight"],
-    ).add_to(folium_map)
-
-def _point_style(point: MapOverlayPoint) -> dict[str, Any]:
-    if point.status == "selected":
-        return {"color": "#7c3aed", "fill_color": "#a78bfa", "fill_opacity": 0.95, "radius": 9, "weight": 3}
-    if point.kind == "tower_candidate":
-        return {"color": "#047857", "fill_color": "#34d399", "fill_opacity": 0.9, "radius": 7, "weight": 2}
-    if point.kind == "route_point":
-        return {"color": "#2563eb", "fill_color": "#ffffff", "fill_opacity": 1.0, "radius": 5, "weight": 2}
-    return {"color": "#334155", "fill_color": "#cbd5e1", "fill_opacity": 0.85, "radius": 5, "weight": 2}
-
-def _point_popup_html(point: MapOverlayPoint) -> str:
-    return (
-        f"<strong>{point.label}</strong><br>"
-        f"x: {point.longitude:.6f}<br>"
-        f"y: {point.latitude:.6f}<br>"
-        f"kind: {point.kind}"
-    )
-
-def _render_overlay_fallback_tables(overlay: MapOverlayResult) -> None:
-    line_rows = [
-        {
-            "선로 ID": line.metadata.get("line_id", line.overlay_id),
-            "구간": line.label,
-            "상태": line.status,
-            "이용률 (%)": round(float(line.metadata.get("utilization", 0.0)) * 100, 1),
-        }
-        for line in overlay.lines
+def _overlay_warnings_for_display(
+    source_warnings: list[str],
+    overlay_warnings: list[str],
+) -> list[str]:
+    source_warning_set = set(source_warnings)
+    return [
+        warning
+        for warning in overlay_warnings
+        if warning not in source_warning_set
     ]
-    route_rows = [
-        {
-            "순위": route.rank,
-            "후보지": route.metadata.get("candidate_label", route.candidate_id),
-            "경로 길이 (km)": round(route.total_distance_km, 1),
-            "예상 비용": round(route.estimated_cost, 1),
-        }
-        for route in overlay.routes
-    ]
-    if line_rows:
-        st.dataframe(pd.DataFrame(line_rows), use_container_width=True, hide_index=True)
-    if route_rows:
-        st.dataframe(pd.DataFrame(route_rows), use_container_width=True, hide_index=True)
 
 # --- 2. 사이드바 입력창 (Form으로 묶어서 한 번에 실행!) ---
 with st.sidebar:
@@ -361,9 +233,6 @@ if st.session_state.sim_run:
     selected_candidates = st.session_state.selected_candidates
 
     # 팀원들이 추가한 안내 메시지 및 시나리오 캡션
-    if not selected_candidates:
-        st.warning("후보지가 비어 기본 후보지를 사용합니다.")
-
     st.caption(
         f"시나리오: {sim_result.scenario.scenario_id}  |  "
         f"입력: {sim_result.simulation_input.start_bus_id} -> "
@@ -383,11 +252,32 @@ if st.session_state.sim_run:
 
     with col_map:
         st.subheader("📍 A* 최적 경로 및 계통 혼잡 지도")
-        _render_overlay_map(
+        render_map_overlay(
             map_overlay,
             map_capability=map_capability,
+            height=650,
+            show_point_table=True,
         )
         st.caption(map_overlay.summary)
+        st.caption(
+            f"지도 모드: {map_overlay.metadata.get('rendering_mode')}  |  "
+            f"좌표계: {map_overlay.metadata.get('coordinate_system')}  |  "
+            f"고도: {map_overlay.metadata.get('elevation_source')}"
+        )
+
+        overlay_extra_warnings = _overlay_warnings_for_display(
+            sim_result.warnings,
+            map_overlay.warnings,
+        )
+        if overlay_extra_warnings:
+            with st.expander("지도 fallback 및 좌표 메타데이터", expanded=False):
+                if map_overlay.fallback.enabled:
+                    st.caption(
+                        f"Fallback: `{map_overlay.fallback.mode}`  |  "
+                        f"{map_overlay.fallback.reason}"
+                    )
+                for warning in overlay_extra_warnings:
+                    st.caption(f"- {warning}")
 
     with col_info:
         # --- 설치 전/후 비교 카드 ---

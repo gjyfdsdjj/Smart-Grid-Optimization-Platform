@@ -180,3 +180,61 @@ def test_candidate_impact_failure_does_not_force_global_simulation_fallback(monk
         for recommendation in result.recommendations
         for note in recommendation.score.notes
     )
+
+
+def test_empty_candidate_selection_uses_service_warning_once():
+    service = SimulationService()
+    simulation_input = service.build_default_input(candidate_site_ids=[])
+
+    result = service.run_simulation(simulation_input)
+
+    assert result.simulation_input.candidate_site_ids == [
+        "SITE_NORTH",
+        "SITE_CENTRAL",
+        "SITE_SOUTH",
+    ]
+    assert sum("후보지가 비어" in warning for warning in result.warnings) == 1
+    assert result.recommendations
+
+
+def test_simulation_loss_delta_unit_is_mw_for_mock_and_actual():
+    service = SimulationService()
+
+    mock_result = service.run_mock_simulation(service.build_default_input())
+    actual_result = service.run_simulation(service.build_default_input())
+
+    mock_loss_delta = next(delta for delta in mock_result.deltas if delta.metric_id == "losses")
+    actual_loss_delta = next(delta for delta in actual_result.deltas if delta.metric_id == "losses")
+
+    assert mock_loss_delta.unit == "MW"
+    assert actual_loss_delta.unit == "MW"
+
+
+def test_counterfactual_deltas_improve_core_metrics_and_vary_by_candidate():
+    service = SimulationService()
+    results = [
+        service.run_simulation(
+            service.build_default_input(
+                load_scale=1.2,
+                candidate_site_ids=[candidate_id],
+            )
+        )
+        for candidate_id in ["SITE_NORTH", "SITE_CENTRAL", "SITE_SOUTH"]
+    ]
+
+    loss_after_values = set()
+    for result in results:
+        deltas = {
+            delta.metric_id: delta
+            for delta in result.deltas
+        }
+
+        assert deltas["peak_utilization"].improvement > 0
+        assert deltas["peak_utilization"].status == "improved"
+        assert deltas["risk_lines"].improvement > 0
+        assert deltas["risk_lines"].status == "improved"
+        assert deltas["losses"].improvement > 0
+        assert deltas["losses"].status == "improved"
+        loss_after_values.add(deltas["losses"].after_value)
+
+    assert len(loss_after_values) > 1

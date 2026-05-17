@@ -33,13 +33,14 @@ def render_map_overlay(
     selected_line_id: str | None = None,
     height: int = 620,
     width: int = 1200,
+    show_point_table: bool = False,
 ) -> None:
     """Render an overlay map without exposing provider secrets in UI messages."""
 
     folium, st_folium, import_error = _load_map_libraries()
     if import_error is not None:
         st.warning(f"지도 라이브러리 fallback: {import_error}")
-        render_overlay_fallback_tables(overlay)
+        render_overlay_fallback_tables(overlay, show_points=show_point_table)
         return
 
     folium_map = folium.Map(
@@ -66,7 +67,11 @@ def render_map_overlay(
     st_folium(folium_map, width=width, height=height, returned_objects=[])
 
 
-def render_overlay_fallback_tables(overlay: MapOverlayResult) -> None:
+def render_overlay_fallback_tables(
+    overlay: MapOverlayResult,
+    *,
+    show_points: bool = False,
+) -> None:
     """Render a compact tabular fallback when Folium is unavailable."""
 
     line_rows = [
@@ -105,7 +110,7 @@ def render_overlay_fallback_tables(overlay: MapOverlayResult) -> None:
         st.dataframe(pd.DataFrame(line_rows), width="stretch", hide_index=True)
     if route_rows:
         st.dataframe(pd.DataFrame(route_rows), width="stretch", hide_index=True)
-    if point_rows and not line_rows and not route_rows:
+    if point_rows and (show_points or (not line_rows and not route_rows)):
         st.dataframe(pd.DataFrame(point_rows), width="stretch", hide_index=True)
 
 

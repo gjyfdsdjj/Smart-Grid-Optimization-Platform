@@ -303,21 +303,24 @@ app.py
 - 사용자가 지도에서 선택한 지점은 `InstallationPoint`로 저장되며, 화면에는 x/y만 표시하고 내부에는 고도 미조회 상태를 남긴다.
 - `pages/01_monitoring.py`는 `MonitoringService.run_dc_power_flow()`를 제품 기본 데이터 소스로 사용하고, 결과를 `MapOverlayService.build_monitoring_overlay()`에 연결해 선로 지도와 상태표를 같은 `line_id` 기준으로 동기화한다.
 - `pages/02_simulation.py`는 더 이상 페이지 안에서 `dc_power_flow.solve()`와 선로 좌표 dict를 직접 조립하지 않고, `MonitoringService.run_dc_power_flow()` 결과를 `MapOverlayService.build_simulation_overlay(..., baseline_monitoring=...)`에 넘겨 기존 선로/후보지/추천 경로를 같은 overlay 계약으로 렌더링한다.
+- `pages/02_simulation.py`의 로컬 Folium helper는 제거되었고, 지도 표시는 `src/ui/map_overlay_renderer.render_map_overlay()`가 맡는다. Folium이 없을 때도 후보지 point 표를 함께 보여주도록 `show_point_table=True`를 사용한다.
+- `SimulationService.build_default_input(candidate_site_ids=[])`는 사용자의 빈 후보 선택을 보존한 뒤 `_normalize_input()`에서 기본 후보와 service warning으로 처리한다.
+- `SimulationService`의 mock/actual/heuristic 손실 delta 단위는 모두 `MW`로 통일한다.
+- `SimulationService`의 counterfactual delta는 raw DC Power Flow 결과가 주변 선로로 혼잡을 밀어내는 경우 후보지 휴리스틱 보정값을 하한으로 사용해 `peak_utilization`, `risk_lines`, `losses`가 후보지/부하 변화에 따라 안정적으로 움직이게 한다.
 - `pages/03_prediction.py`는 `PredictionService` 결과의 위험 선로를 `MapOverlayService.build_prediction_overlay()`로 변환하고, 위험 선로 표에서 선택한 `line_id`를 카드와 지도 선로 강조에 함께 사용한다.
-- `src/ui/map_overlay_renderer.py`는 `MapOverlayResult`를 Folium/VWorld 2.5D 지도 또는 표 fallback으로 렌더링하는 공통 UI helper다. 현재 Monitoring/Prediction 페이지가 사용하며, Simulation 페이지도 후속으로 같은 렌더러에 맞춰 낮출 수 있다.
+- `src/ui/map_overlay_renderer.py`는 `MapOverlayResult`를 Folium/VWorld 2.5D 지도 또는 표 fallback으로 렌더링하는 공통 UI helper다. 현재 Monitoring/Simulation/Prediction 페이지가 함께 사용한다.
 - Folium 또는 `streamlit_folium`이 없으면 지도 대신 overlay 표를 표시한다.
 - `tests/test_model_quality.py`는 `integration` marker가 적용되어 빠른 테스트 명령에서는 제외할 수 있다.
 
 ## 현재 남은 구조적 갭
 - `app.py`는 VWorld 2.5D WMTS/Folium 랜딩과 설치 지점 저장 흐름을 갖췄지만, Streamlit/folium/streamlit_folium 의존성이 설치되지 않은 현재 WSL 환경에서는 실제 화면 실행 검증이 불가능하다.
 - `pages/01_monitoring.py`와 `pages/02_simulation.py`는 overlay 기반 지도 흐름을 갖췄지만, 실제 지도 클릭과 브라우저 렌더링은 Streamlit 런타임에서 추가 수동 검증이 필요하다.
-- `MapOverlayService`는 Monitoring/Simulation/Prediction overlay 계약을 이미 만들었고 app/Monitoring/Simulation/Prediction 축에 연결되었지만, Simulation 페이지의 로컬 지도 helper는 아직 공통 `src/ui/map_overlay_renderer.py`로 완전히 내려오지 않았다.
+- `MapOverlayService`는 Monitoring/Simulation/Prediction overlay 계약을 이미 만들었고 app/Monitoring/Simulation/Prediction 축에 연결되었다. 실제 지도 클릭과 선택 상태 고도화는 Streamlit 런타임 검증 후 별도 보강 대상이다.
 - `ScenarioService`는 JSON 저장/조회/삭제 서비스와 테스트가 있지만, 페이지 UI에는 저장/불러오기 흐름이 없다.
 - `src/domain`, `src/utils`, `src/engine/explain`, `src/engine/optimize`, `src/engine/recommend`는 대부분 한 줄 스텁이다.
 - LSTM 모델 로드/재학습 검증은 아직 `slow` marker 대상으로 별도 분리할 수 있다.
 
 ## 다음 구현 권장 순서
-1. `pages/02_simulation.py`의 로컬 지도 렌더링 helper를 `src/ui/map_overlay_renderer.py`로 교체해 Monitoring/Prediction과 색상/상태 규칙을 맞춘다.
-2. `ScenarioService` 저장/불러오기 UI를 Simulation 또는 공통 sidebar에 붙인다.
-3. LSTM 모델 로드/재학습 테스트를 `slow` marker로 분리한다.
-4. domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하되, 먼저 `schemas.py`와 중복되는 책임 경계를 정한다.
+1. `ScenarioService` 저장/불러오기 UI를 Simulation 또는 공통 sidebar에 붙인다.
+2. LSTM 모델 로드/재학습 테스트를 `slow` marker로 분리한다.
+3. domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하되, 먼저 `schemas.py`와 중복되는 책임 경계를 정한다.

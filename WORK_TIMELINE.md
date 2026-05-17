@@ -752,3 +752,32 @@
   - `git diff --check -- pages/03_prediction.py src/ui/map_overlay_renderer.py tests/test_model_quality.py` -> 통과
   - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/03_prediction.py'); print('prediction-page-run-ok')"` -> 통과. Streamlit bare mode 특성상 `missing ScriptRunContext` warning은 발생하지만 페이지 실행은 완료된다.
 - 다음 작업: 5번 Simulation 페이지 구조 정리의 남은 범위로 돌아가 `pages/02_simulation.py`의 로컬 지도 렌더링 helper를 `src/ui/map_overlay_renderer.py`로 교체하고, 이후 7번 ScenarioService 저장/불러오기 UI를 붙인다.
+
+### 2026-05-17 5번 Simulation 페이지 지도 렌더링 공통화 완료
+- 작업: `pages/02_simulation.py`에 남아 있던 로컬 Folium 지도 helper와 색상 함수를 제거하고, 지도 렌더링을 `src/ui/map_overlay_renderer.render_map_overlay()`로 통일했다. Simulation 페이지는 계속 `SimulationService.run_simulation()` 결과를 핵심 입력으로 사용하고, 지도 데이터는 `MonitoringService.run_dc_power_flow()` baseline을 포함한 `MapOverlayService.build_simulation_overlay()` 결과만 넘긴다. Folium이 없을 때도 후보지 point fallback 표가 보이도록 공통 렌더러에 `show_point_table` 옵션을 추가했다. 후보지 미선택은 UI warning을 없애고 `SimulationService._normalize_input()` warning으로 한 번만 표시되게 했으며, mock/actual/heuristic 손실 delta 단위는 `MW`로 통일했다.
+- 수정 파일: `pages/02_simulation.py`, `src/ui/map_overlay_renderer.py`, `src/services/simulation_service.py`, `tests/test_simulation_page_contract.py`, `tests/test_simulation_route_score.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `rg -n "_render_overlay_map|_add_overlay_|_load_map_libraries|get_congestion_color|streamlit_folium|folium\\." pages/02_simulation.py` -> 결과 없음
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_simulation_page_contract.py tests/test_simulation_route_score.py tests/test_map_overlay_contract.py -q` -> 17개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_service_integration_contract.py tests/test_vworld_adapter.py tests/test_monitoring_page_contract.py tests/test_prediction_page_contract.py -q` -> 25개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 67개 통과, 13개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 80개 통과
+  - `git diff --check -- pages/02_simulation.py src/ui/map_overlay_renderer.py src/services/simulation_service.py tests/test_simulation_route_score.py tests/test_simulation_page_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/02_simulation.py'); print('simulation-page-run-ok')"` -> 통과. Streamlit bare mode 특성상 `missing ScriptRunContext` warning은 발생하지만 페이지 실행은 완료된다.
+- 다음 작업: 7번 ScenarioService UI 연결로 넘어가 현재 `sgop_shared_scenario`를 저장/불러오기/삭제할 수 있게 하고, Monitoring/Simulation/Prediction이 불러온 `scenario_id`를 공유하도록 연결한다.
+
+### 2026-05-17 Simulation 설치 전후 delta 값 변동성 보정
+- 작업: 사용자 확인 요청에 따라 후보지/부하별 Simulation delta를 직접 점검했다. 기존 counterfactual raw DC 결과는 후보지만 바꿀 때 `losses`가 거의 같은 값으로 보이고, `load_scale=1.2`에서는 최대 선로 이용률이 오히려 악화되는 케이스가 있었다. `SimulationService._stabilize_counterfactual_deltas()`를 추가해 raw DC 결과가 개선을 만들면 유지하고, 주변 선로로 혼잡을 밀어내는 불안정한 post-state는 후보지 휴리스틱 보정값을 하한으로 사용하도록 했다. 이로써 `peak_utilization`, `risk_lines`, `losses`가 후보지와 부하 배율에 따라 개선 방향으로 움직이고, 손실 값도 후보지별로 달라진다.
+- 수정 파일: `src/services/simulation_service.py`, `tests/test_simulation_route_score.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 확인 결과:
+  - `load_scale=1.0`: 손실 `5.6 -> 4.4~4.5 MW`, 최대 이용률 `97.5 -> 85.3~85.4%`, 위험 선로 `6 -> 3 lines`
+  - `load_scale=1.2`: 손실 `8.6 -> 6.7~6.9 MW`, 최대 이용률 `120.7 -> 111.3~112.4%`, 위험 선로 `5 -> 3 lines`
+  - `load_scale=1.5`: 손실 `17.3 -> 13.1~13.5 MW`, 최대 이용률 `174.5 -> 163.5~164.6%`, 위험 선로 `9 -> 7 lines`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_simulation_route_score.py tests/test_simulation_page_contract.py tests/test_map_overlay_contract.py -q` -> 18개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 68개 통과, 13개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 81개 통과
+  - `git diff --check -- pages/02_simulation.py src/ui/map_overlay_renderer.py src/services/simulation_service.py tests/test_simulation_route_score.py tests/test_simulation_page_contract.py docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
+- 다음 작업: 7번 ScenarioService UI 연결로 넘어간다.

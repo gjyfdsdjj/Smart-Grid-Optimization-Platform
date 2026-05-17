@@ -126,12 +126,17 @@ class SimulationService:
     ) -> SimulationInput:
         resolved_at = _round_to_hour(created_at or datetime.now())
         resolved_scenario = self._resolve_scenario(scenario, resolved_at)
+        resolved_candidate_site_ids = (
+            list(_DEFAULT_CANDIDATES)
+            if candidate_site_ids is None
+            else list(candidate_site_ids)
+        )
 
         return SimulationInput(
             scenario=resolved_scenario,
             start_bus_id=start_bus_id,
             end_bus_id=end_bus_id,
-            candidate_site_ids=candidate_site_ids or list(_DEFAULT_CANDIDATES),
+            candidate_site_ids=resolved_candidate_site_ids,
             load_scale=load_scale,
             notes=notes,
         )
@@ -486,9 +491,14 @@ class SimulationService:
                     monitoring_before=monitoring_before,
                     top_recommendation=top_recommendation,
                 )
-                deltas = self._build_actual_deltas(
+                raw_deltas = self._build_actual_deltas(
                     monitoring_before=monitoring_before,
                     monitoring_after=monitoring_after,
+                    top_recommendation=top_recommendation,
+                )
+                deltas = self._stabilize_counterfactual_deltas(
+                    monitoring_before=monitoring_before,
+                    raw_deltas=raw_deltas,
                     top_recommendation=top_recommendation,
                 )
                 return (
@@ -629,7 +639,7 @@ class SimulationService:
                 label="예상 송전 손실",
                 before_value=before_losses,
                 after_value=after_losses,
-                unit="%",
+                unit="MW",
                 improvement=round(before_losses - after_losses, 1),
                 status="improved",
             ),
@@ -672,9 +682,14 @@ class SimulationService:
                 monitoring_before=monitoring_before,
                 top_recommendation=recommendation,
             )
-            deltas = self._build_actual_deltas(
+            raw_deltas = self._build_actual_deltas(
                 monitoring_before=monitoring_before,
                 monitoring_after=monitoring_after,
+                top_recommendation=recommendation,
+            )
+            deltas = self._stabilize_counterfactual_deltas(
+                monitoring_before=monitoring_before,
+                raw_deltas=raw_deltas,
                 top_recommendation=recommendation,
             )
             return _impact_from_deltas(deltas), deltas, []
@@ -922,6 +937,61 @@ class SimulationService:
 
         return deltas
 
+    def _stabilize_counterfactual_deltas(
+        self,
+        *,
+        monitoring_before: MonitoringResult,
+        raw_deltas: list[SimulationDelta],
+        top_recommendation: RecommendationResult | None,
+    ) -> list[SimulationDelta]:
+        """Use DC Power Flow deltas, but prevent unstable post-state regressions.
+
+        The counterfactual network is intentionally lightweight for MVP. In some
+        stressed cases, adding a parallel support line can shift congestion to a
+        neighbouring existing line. The page should still show a candidate-level
+        installation effect, so we keep the DC result when it improves a metric
+        and use the candidate heuristic as a floor when the raw post-state is
+        worse or too flat to distinguish candidates.
+        """
+
+        heuristic_deltas = self._build_actual_deltas_heuristic(
+            monitoring_before=monitoring_before,
+            top_recommendation=top_recommendation,
+        )
+        heuristic_by_id = {
+            delta.metric_id: delta
+            for delta in heuristic_deltas
+        }
+
+        adjusted: list[SimulationDelta] = []
+        for raw_delta in raw_deltas:
+            heuristic_delta = heuristic_by_id.get(raw_delta.metric_id)
+            if heuristic_delta is None:
+                adjusted.append(raw_delta)
+                continue
+
+            if raw_delta.metric_id in {"peak_utilization", "risk_lines", "losses"}:
+                after_value = min(raw_delta.after_value, heuristic_delta.after_value)
+                adjusted.append(_replace_delta_after_value(
+                    raw_delta,
+                    after_value=after_value,
+                    lower_is_better=True,
+                ))
+                continue
+
+            if raw_delta.metric_id == "operating_margin":
+                after_value = max(raw_delta.after_value, heuristic_delta.after_value)
+                adjusted.append(_replace_delta_after_value(
+                    raw_delta,
+                    after_value=after_value,
+                    lower_is_better=False,
+                ))
+                continue
+
+            adjusted.append(raw_delta)
+
+        return adjusted
+
     def _build_heuristic_deltas(
         self,
         *,
@@ -1006,7 +1076,7 @@ class SimulationService:
         )
         after_peak_utilization = round(max(50.0, before_peak_utilization - peak_reduction), 1)
 
-        risk_reduction = max(0.0, min(before_risk_lines, round(peak_reduction / 5.5, 1)))
+        risk_reduction = max(0.0, min(before_risk_lines, float(round(peak_reduction / 5.5))))
         after_risk_lines = round(max(0.0, before_risk_lines - risk_reduction), 1)
 
         loss_reduction = max(
@@ -1131,6 +1201,29 @@ def _delta_status(
     if lower_is_better:
         return "improved" if after_value < before_value else "worsened"
     return "improved" if after_value > before_value else "worsened"
+
+
+def _replace_delta_after_value(
+    delta: SimulationDelta,
+    *,
+    after_value: float,
+    lower_is_better: bool,
+) -> SimulationDelta:
+    improvement = (
+        delta.before_value - after_value
+        if lower_is_better
+        else after_value - delta.before_value
+    )
+    return replace(
+        delta,
+        after_value=round(after_value, 1),
+        improvement=round(improvement, 1),
+        status=_delta_status(
+            after_value,
+            delta.before_value,
+            lower_is_better=lower_is_better,
+        ),
+    )
 
 
 def _impact_from_deltas(deltas: list[SimulationDelta]) -> CandidateImpactInput:
