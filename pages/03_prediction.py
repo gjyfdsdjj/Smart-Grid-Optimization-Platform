@@ -7,8 +7,12 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from src.data.adapters.vworld_adapter import get_map_capability
 from src.data.schemas import PredictionResult, ScenarioContext
+from src.services.map_overlay_service import MapOverlayService
 from src.services.prediction_service import PredictionService
+from src.ui.map_overlay_renderer import render_map_overlay
+from src.ui.table_selection import selected_value_from_dataframe_event
 
 # ── 페이지 설정 ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -123,6 +127,39 @@ def _run_prediction_with_fallback(
         return fallback_result
 
 
+def _overlay_warnings_for_display(result: PredictionResult, overlay_warnings: list[str]) -> list[str]:
+    source_warnings = set(result.warnings)
+    return [
+        warning
+        for warning in overlay_warnings
+        if warning not in source_warnings
+    ]
+
+
+def _risk_line_rows(result: PredictionResult) -> list[dict]:
+    return [
+        {
+            "선로 ID": risk_line.line_id,
+            "구간": f"{risk_line.from_bus_name} → {risk_line.to_bus_name}",
+            "위험도": risk_line.risk_level,
+            "예측 이용률 (%)": round(risk_line.predicted_utilization * 100, 1),
+            "피크 시각": f"{risk_line.peak_risk_hour:02d}:00",
+        }
+        for risk_line in result.risk_lines
+    ]
+
+
+def _resolve_selected_line_id(selection_event: object, rows: list[dict]) -> str | None:
+    selected_line_id = selected_value_from_dataframe_event(
+        selection_event,
+        rows,
+        "선로 ID",
+    )
+    if isinstance(selected_line_id, str) and selected_line_id.strip():
+        return selected_line_id.strip()
+    return None
+
+
 _RAW_DIR = str(
     __import__("pathlib").Path(__file__).resolve().parents[1] / "data" / "raw"
 )
@@ -145,9 +182,12 @@ with st.sidebar:
     )
 
     if model_source in {"LSTM", "LSTM+GNN"}:
-        retrain = st.checkbox("모델 재학습", value=False,
-                              help="체크 시 저장된 모델을 무시하고 재학습합니다.")
-        epochs = st.slider("에포크", 5, 50, 20, step=5)
+        retrain = st.checkbox(
+            "모델 재학습 (slow)",
+            value=False,
+            help="체크 시 저장된 모델을 무시하고 재학습합니다. 기본 제품 흐름에서는 꺼두는 것을 권장합니다.",
+        )
+        epochs = st.slider("에포크", 5, 50, 20, step=5) if retrain else 20
     else:
         retrain, epochs = False, 20
 
@@ -169,11 +209,11 @@ with st.sidebar:
     selected_bus_ids = [bus_options[n] for n in selected_names]
 
     st.divider()
-    run_btn = st.button("예측 실행", type="primary", use_container_width=True)
+    run_btn = st.button("예측 실행", type="primary", width="stretch")
 
     save_btn = st.button(
         "현재 결과를 시나리오 A로 저장",
-        use_container_width=True,
+        width="stretch",
         help="저장 후 설정을 바꿔 다시 실행하면 B와 비교합니다.",
         disabled=st.session_state.get("pred_result") is None,
     )
@@ -186,7 +226,7 @@ with st.sidebar:
         st.caption(
             f"시나리오 A: {a.source.upper()} | 배율 {a.load_scale:.0%} | {a.created_at:%m/%d %H:%M}"
         )
-        if st.button("시나리오 A 초기화", use_container_width=True):
+        if st.button("시나리오 A 초기화", width="stretch"):
             st.session_state.pred_scenario_a = None
             st.rerun()
 
@@ -274,6 +314,14 @@ if run_btn or cached_result is None or source_changed:
 result: PredictionResult = st.session_state.pred_result
 if result.scenario is not None:
     st.session_state.sgop_shared_scenario = result.scenario
+
+map_capability = get_map_capability(prefer_webgl=False)
+prediction_overlay = MapOverlayService().build_prediction_overlay(
+    result,
+    map_capability=map_capability,
+)
+st.session_state.pred_map_capability = map_capability
+st.session_state.pred_map_overlay = prediction_overlay
 
 # ── 헤더 ──────────────────────────────────────────────────────────────────────
 st.title("📈 24시간 부하 예측")
@@ -433,26 +481,53 @@ st.divider()
 # ── Section 2: 위험도 카드 ────────────────────────────────────────────────────
 st.subheader("위험 선로 목록")
 
+risk_rows = _risk_line_rows(result)
+selected_line_id: str | None = None
+
 if not result.risk_lines:
     st.success("예측 구간 내 위험 선로가 없습니다.")
 else:
+    risk_event = st.dataframe(
+        pd.DataFrame(risk_rows),
+        width="stretch",
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="prediction_risk_line_table",
+    )
+    selected_line_id = _resolve_selected_line_id(risk_event, risk_rows)
+    valid_line_ids = {row["선로 ID"] for row in risk_rows}
+    if selected_line_id is not None:
+        st.session_state.prediction_selected_line_id = selected_line_id
+    else:
+        selected_line_id = st.session_state.get("prediction_selected_line_id")
+        if selected_line_id not in valid_line_ids:
+            selected_line_id = None
+            st.session_state.prediction_selected_line_id = None
+
+    if selected_line_id is not None:
+        st.caption(f"선택 위험 선로: `{selected_line_id}`")
+
     top_lines = result.risk_lines[:6]  # 최대 6개
     cols = st.columns(min(3, len(top_lines)))
 
     for idx, rline in enumerate(top_lines):
         col = cols[idx % 3]
-        color = _RISK_COLOR.get(rline.risk_level, "#95a5a6")
+        is_selected = rline.line_id == selected_line_id
+        color = "#7c3aed" if is_selected else _RISK_COLOR.get(rline.risk_level, "#95a5a6")
         label = _RISK_LABEL.get(rline.risk_level, rline.risk_level)
         util_pct = int(rline.predicted_utilization * 100)
+        border_width = 5 if is_selected else 4
+        background = "#f5f3ff" if is_selected else "#fafafa"
 
         with col:
             st.markdown(
                 f"""
                 <div style="
-                    border-left: 4px solid {color};
+                    border-left: {border_width}px solid {color};
                     padding: 12px 14px;
                     border-radius: 6px;
-                    background: #fafafa;
+                    background: {background};
                     margin-bottom: 12px;
                 ">
                     <div style="font-size:0.78rem; color:#666;">{rline.line_id}</div>
@@ -480,7 +555,38 @@ else:
 
 st.divider()
 
-# ── Section 3: 설명 카드 (xAI) ────────────────────────────────────────────────
+# ── Section 3: 예측 위험 선로 지도 ─────────────────────────────────────────────
+st.subheader("예측 위험 선로 지도")
+
+if prediction_overlay.lines:
+    render_map_overlay(
+        prediction_overlay,
+        map_capability=map_capability,
+        selected_line_id=selected_line_id,
+    )
+    st.caption(prediction_overlay.summary)
+    st.caption(
+        f"지도 모드: {prediction_overlay.metadata.get('rendering_mode')}  |  "
+        f"좌표계: {prediction_overlay.metadata.get('coordinate_system')}  |  "
+        f"고도: {prediction_overlay.metadata.get('elevation_source')}"
+    )
+
+    overlay_extra_warnings = _overlay_warnings_for_display(result, prediction_overlay.warnings)
+    if overlay_extra_warnings:
+        with st.expander("지도 fallback 및 좌표 메타데이터", expanded=False):
+            if prediction_overlay.fallback.enabled:
+                st.caption(
+                    f"Fallback: `{prediction_overlay.fallback.mode}`  |  "
+                    f"{prediction_overlay.fallback.reason}"
+                )
+            for warning in overlay_extra_warnings:
+                st.caption(f"- {warning}")
+else:
+    st.info("지도에 표시할 예측 위험 선로가 없습니다.")
+
+st.divider()
+
+# ── Section 4: 설명 카드 (xAI) ────────────────────────────────────────────────
 st.subheader("AI 설명")
 
 if not result.risk_lines:
@@ -499,7 +605,7 @@ else:
             col_e3.metric("위험 등급", label)
             st.markdown(f"> {rline.explanation}")
 
-# ── Section 4: 시나리오 비교 ──────────────────────────────────────────────────
+# ── Section 5: 시나리오 비교 ──────────────────────────────────────────────────
 scenario_a: PredictionResult | None = st.session_state.pred_scenario_a
 scenario_b: PredictionResult | None = result
 
@@ -548,7 +654,7 @@ if scenario_a is not None and scenario_a is not scenario_b:
         margin={"t": 20, "b": 40},
         legend={"orientation": "h", "y": -0.25},
     )
-    st.plotly_chart(fig_cmp, use_container_width=True)
+    st.plotly_chart(fig_cmp, width="stretch")
 
     # ── 위험 선로 비교표 ────────────────────────────────────────────────────
     risk_a = {r.line_id: r for r in scenario_a.risk_lines}
@@ -578,6 +684,6 @@ if scenario_a is not None and scenario_a is not scenario_b:
                     else "신규" if rb else "해소"
                 ),
             })
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
     else:
         st.info("두 시나리오 모두 위험 선로가 없습니다.")

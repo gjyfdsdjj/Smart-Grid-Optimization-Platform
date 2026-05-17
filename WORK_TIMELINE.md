@@ -739,3 +739,16 @@
   - `git diff --check -- pages/01_monitoring.py src/ui/map_overlay_renderer.py src/ui/table_selection.py tests/test_monitoring_page_contract.py docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
   - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/01_monitoring.py'); print('monitoring-page-run-ok')"` -> 통과. Streamlit bare mode 특성상 `missing ScriptRunContext` warning은 발생하지만 페이지 실행은 완료된다.
 - 다음 작업: `pages/03_prediction.py`의 위험 선로를 `MapOverlayService.build_prediction_overlay()`와 `src/ui/map_overlay_renderer.py`에 연결하고, 위험 선로 카드/지도 선로를 `line_id` 기준으로 동기화한다.
+
+### 2026-05-17 6번 Prediction 페이지 overlay 연결 완료
+- 작업: `pages/03_prediction.py`의 위험 선로 목록을 선택 가능한 표로 바꾸고, 선택된 `line_id`를 `st.session_state.prediction_selected_line_id`에 저장해 위험 카드와 지도 선로 강조에 함께 사용하도록 연결했다. Prediction 결과는 `MapOverlayService.build_prediction_overlay()`로 변환하고, `src/ui/map_overlay_renderer.py`의 공통 Folium/VWorld 2.5D 또는 표 fallback 렌더러로 표시한다. 지도 overlay warning은 서비스 warning과 중복되지 않게 분리해 표시하며, 좌표계와 고도 미조회 메타데이터를 지도 섹션에 남긴다. LSTM 재학습은 기본 제품 흐름에서 꺼진 `slow` 경로로 보이도록 UI를 정리했고, 실제 raw data를 읽는 `tests/test_model_quality.py`에는 `integration` marker를 적용했다. Prediction overlay 표 fallback이 `predicted_utilization`을 읽도록 공통 렌더러 helper도 보강했다.
+- 수정 파일: `pages/03_prediction.py`, `src/ui/map_overlay_renderer.py`, `tests/test_prediction_page_contract.py`, `tests/test_model_quality.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_prediction_page_contract.py tests/test_map_overlay_contract.py -q` -> 10개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_prediction_risk_and_fallback.py tests/test_prediction_service_contract.py -q` -> 8개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 62개 통과, 13개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 75개 통과
+  - `git diff --check -- pages/03_prediction.py src/ui/map_overlay_renderer.py tests/test_model_quality.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/03_prediction.py'); print('prediction-page-run-ok')"` -> 통과. Streamlit bare mode 특성상 `missing ScriptRunContext` warning은 발생하지만 페이지 실행은 완료된다.
+- 다음 작업: 5번 Simulation 페이지 구조 정리의 남은 범위로 돌아가 `pages/02_simulation.py`의 로컬 지도 렌더링 helper를 `src/ui/map_overlay_renderer.py`로 교체하고, 이후 7번 ScenarioService 저장/불러오기 UI를 붙인다.

@@ -74,7 +74,7 @@ def render_overlay_fallback_tables(overlay: MapOverlayResult) -> None:
             "선로 ID": line_id_from_overlay_line(line),
             "구간": line.label,
             "상태": line.status,
-            "이용률 (%)": round(float(line.metadata.get("utilization", 0.0)) * 100, 1),
+            "이용률 (%)": round(line_utilization_from_overlay_line(line) * 100, 1),
             "소스": line.source,
         }
         for line in overlay.lines
@@ -111,6 +111,17 @@ def render_overlay_fallback_tables(overlay: MapOverlayResult) -> None:
 
 def line_id_from_overlay_line(line: MapOverlayLine) -> str:
     return str(line.metadata.get("line_id", line.overlay_id))
+
+
+def line_utilization_from_overlay_line(line: MapOverlayLine) -> float:
+    raw_value = line.metadata.get(
+        "utilization",
+        line.metadata.get("predicted_utilization", 0.0),
+    )
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def line_style_for_status(status: str, *, selected: bool = False) -> dict[str, Any]:
