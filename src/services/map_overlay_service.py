@@ -84,6 +84,36 @@ _CANDIDATE_COORDINATES: dict[str, _CoordinateSpec] = {
 class MapOverlayService:
     """서비스 결과를 지도 UI가 아닌 공통 overlay 데이터로 변환한다."""
 
+    def build_landing_overlay(
+        self,
+        *,
+        scenario: ScenarioContext,
+        created_at: datetime,
+        points: list[MapOverlayPoint],
+        routes: list[MapOverlayRoute] | None = None,
+        warnings: list[str] | None = None,
+        map_capability: MapCapability | None = None,
+    ) -> MapOverlayResult:
+        capability = _resolve_map_capability(map_capability)
+        route_list = list(routes or [])
+        point_list = list(points)
+        return _build_overlay_result(
+            scenario=scenario,
+            created_at=created_at,
+            source="manual",
+            points=point_list,
+            lines=[],
+            routes=route_list,
+            summary=(
+                f"Landing overlay: 운영 지점 {len(point_list)}개와 "
+                f"추천 경로 {len(route_list)}개를 제공합니다."
+            ),
+            source_warnings=[],
+            local_warnings=list(warnings or []),
+            source_fallback=build_no_fallback_info(),
+            map_capability=capability,
+        )
+
     def build_monitoring_overlay(
         self,
         result: MonitoringResult,
@@ -136,12 +166,42 @@ class MapOverlayService:
         self,
         result: SimulationResult,
         *,
+        baseline_monitoring: MonitoringResult | None = None,
         map_capability: MapCapability | None = None,
     ) -> MapOverlayResult:
         capability = _resolve_map_capability(map_capability)
-        points: list[MapOverlayPoint] = []
+        points_by_id: dict[str, MapOverlayPoint] = {}
+        lines: list[MapOverlayLine] = []
         routes: list[MapOverlayRoute] = []
         warnings: list[str] = []
+
+        if baseline_monitoring is not None:
+            for line in baseline_monitoring.line_statuses:
+                from_point = self._monitoring_bus_point(
+                    line.from_bus,
+                    fallback_label=line.from_bus_name,
+                    source=baseline_monitoring.source,
+                    warnings=warnings,
+                )
+                to_point = self._monitoring_bus_point(
+                    line.to_bus,
+                    fallback_label=line.to_bus_name,
+                    source=baseline_monitoring.source,
+                    warnings=warnings,
+                )
+                if from_point is None or to_point is None:
+                    continue
+
+                points_by_id.setdefault(from_point.overlay_id, from_point)
+                points_by_id.setdefault(to_point.overlay_id, to_point)
+                lines.append(
+                    _monitoring_line_overlay(
+                        line,
+                        from_point,
+                        to_point,
+                        baseline_monitoring.source,
+                    )
+                )
 
         for recommendation in result.recommendations:
             candidate_point = self._candidate_point_from_recommendation(
@@ -149,26 +209,33 @@ class MapOverlayService:
                 source=result.source,
             )
             if candidate_point is not None:
-                points.append(candidate_point)
+                points_by_id[candidate_point.overlay_id] = candidate_point
 
             route = _route_overlay_from_recommendation(recommendation, result.source)
             if route is not None:
                 routes.append(route)
 
+        source_fallback = result.fallback
+        source_warnings = list(result.warnings)
+        if baseline_monitoring is not None:
+            source_warnings.extend(baseline_monitoring.warnings)
+            if not source_fallback.enabled and baseline_monitoring.fallback.enabled:
+                source_fallback = baseline_monitoring.fallback
+
         return _build_overlay_result(
             scenario=result.scenario,
             created_at=result.created_at,
             source=result.source,
-            points=points,
-            lines=[],
+            points=list(points_by_id.values()),
+            lines=lines,
             routes=routes,
             summary=(
-                f"Simulation overlay: 후보지 {len(points)}개와 "
-                f"추천 경로 {len(routes)}개를 제공합니다."
+                f"Simulation overlay: 후보지 {len(result.recommendations)}개, "
+                f"기존 선로 {len(lines)}개, 추천 경로 {len(routes)}개를 제공합니다."
             ),
-            source_warnings=result.warnings,
+            source_warnings=source_warnings,
             local_warnings=warnings,
-            source_fallback=result.fallback,
+            source_fallback=source_fallback,
             map_capability=capability,
         )
 
@@ -284,13 +351,21 @@ class MapOverlayService:
             return None
 
         score = recommendation.score
+        is_user_candidate = recommendation.candidate_id.startswith("user:")
+        installation_id = (
+            recommendation.candidate_id.removeprefix("user:")
+            if is_user_candidate
+            else None
+        )
         return _point_from_coordinate(
             coordinate,
             kind="tower_candidate",
             status="selected" if recommendation.rank == 1 else "normal",
-            source=source,
+            source="manual" if is_user_candidate else source,
             metadata={
                 "candidate_id": recommendation.candidate_id,
+                "installation_id": installation_id,
+                "candidate_source": "landing_installation" if is_user_candidate else "service_candidate",
                 "rank": recommendation.rank,
                 "score_total": score.total_score if score is not None else None,
                 "congestion_relief": score.congestion_relief if score is not None else None,
@@ -365,6 +440,12 @@ def _route_overlay_from_recommendation(
         for point in route.waypoints
     ]
     score = recommendation.score
+    is_user_candidate = recommendation.candidate_id.startswith("user:")
+    installation_id = (
+        recommendation.candidate_id.removeprefix("user:")
+        if is_user_candidate
+        else None
+    )
     return MapOverlayRoute(
         overlay_id=f"simulation-route:{route.route_id}",
         label=f"{recommendation.rank}순위 {recommendation.candidate_label}",
@@ -377,6 +458,8 @@ def _route_overlay_from_recommendation(
         source=source,
         metadata={
             "candidate_id": recommendation.candidate_id,
+            "installation_id": installation_id,
+            "candidate_source": "landing_installation" if is_user_candidate else "service_candidate",
             "candidate_label": recommendation.candidate_label,
             "path_node_ids": list(route.path_node_ids),
             "score_total": score.total_score if score is not None else None,

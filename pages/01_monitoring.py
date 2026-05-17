@@ -1,14 +1,18 @@
 # 송전망 혼잡 상태를 보여주는 모니터링 페이지를 구성한다.
 from __future__ import annotations
 
-from datetime import datetime
-
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from src.data.adapters.vworld_adapter import get_map_capability
 from src.data.schemas import MonitoringKpi, MonitoringResult, ScenarioContext
+from src.services.map_overlay_service import MapOverlayService
 from src.services.monitoring_service import MonitoringService
+from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay
+from src.ui.scenario_controls import MONITORING_DATA_SOURCE_KEY, MONITORING_LOAD_SCALE_KEY
+from src.ui.scenario_controls import render_scenario_sidebar
+from src.ui.table_selection import selected_value_from_dataframe_event
 
 # ── 상수 ──────────────────────────────────────────────────────────────────────
 
@@ -30,23 +34,6 @@ _STATUS_LABEL: dict[str, str] = {
 # ── 페이지 설정 ────────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="모니터링 | SGOP", layout="wide")
-
-# ── 공유 시나리오 헬퍼 ─────────────────────────────────────────────────────────
-
-def _get_shared_scenario() -> ScenarioContext:
-    scenario = st.session_state.get("sgop_shared_scenario")
-    if isinstance(scenario, ScenarioContext):
-        return scenario
-    scenario = ScenarioContext(
-        scenario_id="sgop-demo-scenario",
-        title="SGOP Demo Scenario",
-        description="Monitoring과 Simulation이 공유하는 기본 시나리오",
-        region="South Korea",
-        created_at=datetime.now().replace(minute=0, second=0, microsecond=0),
-        created_by="streamlit-session",
-    )
-    st.session_state.sgop_shared_scenario = scenario
-    return scenario
 
 
 def _fmt_kpi_value(kpi: MonitoringKpi) -> str:
@@ -70,6 +57,23 @@ def _fmt_kpi_delta(kpi: MonitoringKpi) -> str | None:
 # ── 사이드바 ───────────────────────────────────────────────────────────────────
 
 service = MonitoringService()
+overlay_service = MapOverlayService()
+shared_scenario = render_scenario_sidebar()
+_DATA_SOURCE_OPTIONS = ["mock", "DC Power Flow"]
+
+if MONITORING_LOAD_SCALE_KEY not in st.session_state:
+    st.session_state[MONITORING_LOAD_SCALE_KEY] = 1.0
+else:
+    try:
+        st.session_state[MONITORING_LOAD_SCALE_KEY] = max(
+            0.5,
+            min(float(st.session_state[MONITORING_LOAD_SCALE_KEY]), 1.5),
+        )
+    except (TypeError, ValueError):
+        st.session_state[MONITORING_LOAD_SCALE_KEY] = 1.0
+
+if st.session_state.get(MONITORING_DATA_SOURCE_KEY) not in _DATA_SOURCE_OPTIONS:
+    st.session_state[MONITORING_DATA_SOURCE_KEY] = "DC Power Flow"
 
 
 def _load_monitoring_result(
@@ -96,25 +100,36 @@ def _load_monitoring_result(
         st.error(f"모니터링 결과 생성 실패: {exc}")
         st.stop()
 
+
+def _resolve_selected_line_id(selection_event: object, rows: list[dict]) -> str | None:
+    selected_line_id = selected_value_from_dataframe_event(
+        selection_event,
+        rows,
+        "선로 ID",
+    )
+    if isinstance(selected_line_id, str) and selected_line_id.strip():
+        return selected_line_id.strip()
+    return None
+
 with st.sidebar:
     st.header("모니터링 설정")
     load_scale = st.slider(
         "부하 배율",
         min_value=0.5,
         max_value=1.5,
-        value=1.0,
         step=0.05,
         help="전체 부하의 배율. 1.3 이상이면 위험·과부하 선로가 늘어납니다.",
+        key=MONITORING_LOAD_SCALE_KEY,
     )
     st.divider()
     data_source = st.radio(
         "데이터 소스",
-        options=["mock", "DC Power Flow"],
-        index=0,
+        options=_DATA_SOURCE_OPTIONS,
         help="mock: 고정 합성 데이터 (빠름) / DC Power Flow: 선형 조류 계산 (실제 물리 모델)",
+        key=MONITORING_DATA_SOURCE_KEY,
     )
     st.divider()
-    if st.button("새로고침", use_container_width=True):
+    if st.button("새로고침", width="stretch"):
         st.cache_data.clear()
     st.caption(f"데이터 소스: {data_source}")
 
@@ -131,12 +146,18 @@ with st.spinner("모니터링 결과를 생성하는 중입니다..."):
     result: MonitoringResult = _load_monitoring_result(
         service=service,
         data_source=data_source,
-        scenario=_get_shared_scenario(),
+        scenario=shared_scenario,
         load_scale=load_scale,
     )
 
 st.session_state.sgop_shared_scenario = result.scenario
 st.session_state.sgop_monitoring_result = result
+map_capability = get_map_capability(prefer_webgl=False)
+map_overlay = overlay_service.build_monitoring_overlay(
+    result,
+    map_capability=map_capability,
+)
+st.session_state.sgop_monitoring_overlay = map_overlay
 cs = result.congestion_summary
 lines = result.line_statuses
 
@@ -197,7 +218,7 @@ if not trend_df.empty:
         xaxis_title="시각", yaxis_title="총부하 (MW)",
         hovermode="x unified", plot_bgcolor="white",
     )
-    st.plotly_chart(trend_fig, use_container_width=True)
+    st.plotly_chart(trend_fig, width="stretch")
 
 st.divider()
 
@@ -225,7 +246,7 @@ with col_chart:
         xaxis_tickangle=-30, height=400,
         margin=dict(t=30, b=10, l=10, r=10), plot_bgcolor="white",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 with col_danger:
     st.subheader("위험·경고 선로")
@@ -264,11 +285,55 @@ rows = [
 ]
 df = pd.DataFrame(rows)
 
-st.dataframe(
+selected_line_event = st.dataframe(
     df,
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
+    on_select="rerun",
+    selection_mode="single-row",
+    key="monitoring_line_status_table",
 )
+
+selected_line_id = _resolve_selected_line_id(selected_line_event, rows)
+valid_line_ids = {row["선로 ID"] for row in rows}
+if selected_line_id is not None:
+    st.session_state.monitoring_selected_line_id = selected_line_id
+else:
+    selected_line_id = st.session_state.get("monitoring_selected_line_id")
+    if selected_line_id not in valid_line_ids:
+        selected_line_id = None
+        st.session_state.monitoring_selected_line_id = None
+
+if selected_line_id is not None:
+    st.caption(f"선택 선로: `{selected_line_id}`")
+
+st.divider()
+
+# ── 지도 overlay ──────────────────────────────────────────────────────────────
+
+st.subheader("선로 지도")
+render_map_overlay(
+    map_overlay,
+    map_capability=map_capability,
+    selected_line_id=selected_line_id,
+)
+st.caption(map_overlay.summary)
+st.caption(
+    f"지도 모드: {map_overlay.metadata.get('rendering_mode')}  |  "
+    f"좌표계: {map_overlay.metadata.get('coordinate_system')}  |  "
+    f"고도: {map_overlay.metadata.get('elevation_source')}"
+)
+
+overlay_extra_warnings = overlay_warnings_for_display(result.warnings, map_overlay.warnings)
+if overlay_extra_warnings:
+    with st.expander("지도 fallback 및 좌표 메타데이터", expanded=False):
+        if map_overlay.fallback.enabled:
+            st.caption(
+                f"Fallback: `{map_overlay.fallback.mode}`  |  "
+                f"{map_overlay.fallback.reason}"
+            )
+        for warning in overlay_extra_warnings:
+            st.caption(f"- {warning}")
 
 st.caption(
     f"기준 시각: {result.created_at:%Y-%m-%d %H:%M:%S}  |  "

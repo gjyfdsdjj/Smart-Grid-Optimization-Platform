@@ -4,3 +4,96 @@
 앱 실행 파일과 전체 소스 코드, 데이터, 모델, 테스트 폴더를 포함한다.
 
 민감 정보는 `.env`, `secrets/`, `data/private/`에서 별도로 관리한다.
+
+## 실행 환경
+
+- Python: `.venv/bin/python` 기준, 현재 검증 버전은 Python 3.10.12다.
+- 의존성 설치:
+
+```bash
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+- Streamlit 앱 실행:
+
+```bash
+.venv/bin/streamlit run app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true
+```
+
+- 브라우저 확인:
+
+```text
+http://127.0.0.1:8501
+```
+
+- HTTP 응답 확인:
+
+```bash
+curl -I http://127.0.0.1:8501
+```
+
+정상 기준은 `HTTP/1.1 200 OK`다.
+
+## 테스트 명령
+
+정적 컴파일 검증:
+
+```bash
+PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests
+```
+
+빠른 기본 테스트:
+
+```bash
+PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q
+```
+
+전체 테스트:
+
+```bash
+PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q
+```
+
+실데이터 또는 저장 모델을 읽는 테스트:
+
+```bash
+PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m integration -q
+```
+
+LSTM 로드/재학습 slow smoke 테스트:
+
+```bash
+SGOP_RUN_SLOW_LSTM=1 PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m slow -q
+```
+
+`integration` marker는 repository raw data 또는 저장 모델을 읽는 테스트에 사용한다.
+`slow` marker는 TensorFlow/LSTM 모델 로드 또는 재학습처럼 기본 제품 흐름보다 오래 걸릴 수 있는 테스트에 사용한다.
+
+Streamlit 페이지 import-safe 검증은 `tests/test_streamlit_import_safe.py`에서 bare-run으로 수행한다. 이때 `missing ScriptRunContext` warning은 Streamlit bare mode 특성이므로 return code가 0이면 통과로 본다.
+
+## 환경 변수와 secrets
+
+- `.env`: 로컬 개발용 환경 변수 파일이다. 저장소에 운영 키를 커밋하지 않는다.
+- `secrets/`: 배포 또는 로컬 비밀정보 템플릿을 두는 위치다.
+- `data/private/`: 사용자별 시나리오 저장소 같은 private runtime 데이터를 둔다.
+- Streamlit Cloud 배포 시 비밀정보는 Streamlit secrets 기준으로 관리한다.
+- VWorld 키는 `VWORLD_API_KEY`로 읽는다. 키가 없어도 앱은 `map_2_5d` 또는 표 fallback으로 계속 동작해야 한다.
+
+현재 시나리오 저장 기본 위치:
+
+```text
+data/private/scenarios.json
+```
+
+저장 파일에는 `ScenarioContext`와 `ScenarioPageState`가 함께 들어간다.
+현재 저장 범위는 랜딩 지도 설치 지점, Monitoring 부하 배율/데이터 소스, Simulation 시작/종료 버스·후보지·부하 배율, Prediction 모델·부하 배율·선택 노드다.
+계산 결과와 지도 overlay 캐시는 저장하지 않으며, 저장된 시나리오를 불러오면 이전 결과 캐시는 비운 뒤 입력값만 복원한다.
+기존 `ScenarioContext`만 들어 있던 JSON은 계속 읽을 수 있다.
+랜딩에서 추가한 송전탑 설치 지점은 Simulation 후보 목록에 `사용자 추가 송전탑`으로 표시되고, 선택하면 `user:<installation_id>` 후보로 route/score/overlay 계산에 포함된다.
+
+## Fallback 정책
+
+- 외부 API 또는 실제 데이터가 없어도 mock 기준으로 앱이 중단되지 않아야 한다.
+- VWorld 3D/WebGL은 기본 제품 경로가 아니며, 기본 지도 경로는 `map_2_5d`다.
+- Folium 또는 `streamlit_folium`이 없으면 지도 대신 overlay 표 fallback을 표시한다.
+- Prediction의 LSTM/GNN/Hybrid 경로가 실패하면 baseline 또는 mock fallback으로 내려가고, fallback 이유는 서비스 결과의 `warnings`와 `fallback`에 남긴다.

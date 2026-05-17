@@ -1,16 +1,56 @@
 from __future__ import annotations
-from datetime import datetime
 
 import pandas as pd
 import streamlit as st
-import folium
-from streamlit_folium import st_folium
 
-from src.data.schemas import ScenarioContext, ScoreBreakdown, SimulationResult
-from src.engine.powerflow.dc_power_flow import solve, build_default_buses, build_default_line_inputs
+from src.data.adapters.vworld_adapter import MapCapability, get_map_capability
+from src.data.schemas import (
+    InstallationPoint,
+    MapOverlayResult,
+    ScoreBreakdown,
+    SimulationResult,
+)
+from src.services.map_overlay_service import MapOverlayService
+from src.services.monitoring_service import MonitoringService
 from src.services.simulation_service import SimulationService
+from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay
+from src.ui.scenario_controls import (
+    LANDING_INSTALLATIONS_KEY,
+    SIMULATION_CANDIDATES_KEY,
+    SIMULATION_END_BUS_KEY,
+    SIMULATION_LOAD_SCALE_KEY,
+    SIMULATION_START_BUS_KEY,
+)
+from src.ui.scenario_controls import render_scenario_sidebar
 
 st.set_page_config(page_title="시뮬레이션 | SGOP", layout="wide")
+
+
+def _user_candidate_id(installation: InstallationPoint) -> str:
+    return f"user:{installation.installation_id}"
+
+
+def _split_candidate_selection(
+    selected_candidate_ids: list[str],
+    user_installations: list[InstallationPoint],
+) -> tuple[list[str], list[InstallationPoint]]:
+    selected_user_ids = {
+        candidate_id
+        for candidate_id in selected_candidate_ids
+        if candidate_id.startswith("user:")
+    }
+    engine_candidate_ids = [
+        candidate_id
+        for candidate_id in selected_candidate_ids
+        if not candidate_id.startswith("user:")
+    ]
+    user_candidate_points = [
+        installation
+        for installation in user_installations
+        if _user_candidate_id(installation) in selected_user_ids
+    ]
+    return engine_candidate_ids, user_candidate_points
+
 
 # --- 1. 서비스 초기화 및 색상 로직 ---
 @st.cache_resource
@@ -18,37 +58,55 @@ def get_service():
     return SimulationService()
 
 sim_service = get_service()
-
-def _get_shared_scenario() -> ScenarioContext:
-    scenario = st.session_state.get("sgop_shared_scenario")
-    if isinstance(scenario, ScenarioContext):
-        return scenario
-
-    created_at = datetime.now().replace(minute=0, second=0, microsecond=0)
-    scenario = ScenarioContext(
-        scenario_id="sgop-demo-scenario",
-        title="SGOP Demo Scenario",
-        description="Monitoring, Simulation, Prediction이 공유하는 기본 시나리오",
-        region="South Korea",
-        created_at=created_at,
-        created_by="streamlit-session",
-    )
-    st.session_state.sgop_shared_scenario = scenario
-    return scenario
+overlay_service = MapOverlayService()
+monitoring_service = MonitoringService()
+shared_scenario = render_scenario_sidebar()
 
 bus_options = sim_service.list_bus_options()
 candidate_options = sim_service.list_candidate_options()
-
-def get_congestion_color(flow_mw, capacity_mw):
-    if capacity_mw <= 0: return "#9ca3af"
-    congestion = (abs(flow_mw) / capacity_mw) * 100
-    if congestion >= 80: return "#ef4444"  # 빨강
-    elif congestion >= 50: return "#eab308" # 노랑
-    else: return "#22c55e" # 초록
+bus_ids = [bus_id for bus_id, _label in bus_options]
+landing_tower_installations = [
+    installation
+    for installation in st.session_state.get(LANDING_INSTALLATIONS_KEY, [])
+    if isinstance(installation, InstallationPoint)
+    and installation.kind == "transmission_tower"
+]
+user_candidate_options = [
+    (_user_candidate_id(installation), f"사용자 추가 송전탑: {installation.label}")
+    for installation in landing_tower_installations
+]
+all_candidate_options = candidate_options + user_candidate_options
+candidate_ids = [candidate_id for candidate_id, _label in all_candidate_options]
+candidate_label_by_id = dict(all_candidate_options)
+default_end_bus = bus_ids[10] if len(bus_ids) > 10 else bus_ids[-1]
 
 # --- 세션 상태(Session State) 초기화 ---
 if 'sim_run' not in st.session_state:
     st.session_state.sim_run = False
+if st.session_state.get(SIMULATION_START_BUS_KEY) not in bus_ids:
+    st.session_state[SIMULATION_START_BUS_KEY] = bus_ids[0]
+if st.session_state.get(SIMULATION_END_BUS_KEY) not in bus_ids:
+    st.session_state[SIMULATION_END_BUS_KEY] = default_end_bus
+if SIMULATION_CANDIDATES_KEY not in st.session_state:
+    st.session_state[SIMULATION_CANDIDATES_KEY] = list(candidate_ids)
+elif isinstance(st.session_state[SIMULATION_CANDIDATES_KEY], list):
+    st.session_state[SIMULATION_CANDIDATES_KEY] = [
+        candidate_id
+        for candidate_id in st.session_state[SIMULATION_CANDIDATES_KEY]
+        if candidate_id in candidate_ids
+    ]
+else:
+    st.session_state[SIMULATION_CANDIDATES_KEY] = list(candidate_ids)
+if SIMULATION_LOAD_SCALE_KEY not in st.session_state:
+    st.session_state[SIMULATION_LOAD_SCALE_KEY] = 1.0
+else:
+    try:
+        st.session_state[SIMULATION_LOAD_SCALE_KEY] = max(
+            0.5,
+            min(float(st.session_state[SIMULATION_LOAD_SCALE_KEY]), 1.5),
+        )
+    except (TypeError, ValueError):
+        st.session_state[SIMULATION_LOAD_SCALE_KEY] = 1.0
 
 def _build_recommendation_rows(sim_result: SimulationResult) -> list[dict]:
     rows: list[dict] = []
@@ -138,22 +196,56 @@ def _format_route_nodes(sim_result: SimulationResult) -> str:
         return "-"
     return " -> ".join(route.path_node_ids)
 
+def _build_map_overlay(
+    sim_result: SimulationResult,
+    *,
+    map_capability: MapCapability,
+) -> MapOverlayResult:
+    baseline_monitoring = monitoring_service.run_dc_power_flow(
+        scenario=sim_result.scenario,
+        load_scale=sim_result.simulation_input.load_scale,
+        created_at=sim_result.created_at,
+    )
+    return overlay_service.build_simulation_overlay(
+        sim_result,
+        baseline_monitoring=baseline_monitoring,
+        map_capability=map_capability,
+    )
+
 # --- 2. 사이드바 입력창 (Form으로 묶어서 한 번에 실행!) ---
 with st.sidebar:
     st.header("⚡ 시뮬레이션 제어")
     
     with st.form("simulation_form"):
-        start_bus = st.selectbox("시작 버스", options=[b[0] for b in bus_options], format_func=lambda x: dict(bus_options)[x], index=0)
-        end_bus = st.selectbox("종료 버스", options=[b[0] for b in bus_options], format_func=lambda x: dict(bus_options)[x], index=10)
+        start_bus = st.selectbox(
+            "시작 버스",
+            options=bus_ids,
+            format_func=lambda x: dict(bus_options)[x],
+            key=SIMULATION_START_BUS_KEY,
+        )
+        end_bus = st.selectbox(
+            "종료 버스",
+            options=bus_ids,
+            format_func=lambda x: dict(bus_options)[x],
+            key=SIMULATION_END_BUS_KEY,
+        )
         
         selected_candidates = st.multiselect(
             "경유 후보지 선택", 
-            options=[c[0] for c in candidate_options],
-            default=[c[0] for c in candidate_options],
-            format_func=lambda x: dict(candidate_options)[x]
+            options=candidate_ids,
+            format_func=lambda x: candidate_label_by_id[x]
+            if x in candidate_label_by_id
+            else x,
+            key=SIMULATION_CANDIDATES_KEY,
         )
         
-        load_scale = st.slider("시스템 전체 부하 배율", 0.5, 1.5, 1.0, 0.05)
+        load_scale = st.slider(
+            "시스템 전체 부하 배율",
+            0.5,
+            1.5,
+            step=0.05,
+            key=SIMULATION_LOAD_SCALE_KEY,
+        )
         
         submitted = st.form_submit_button("🚀 시뮬레이션 실행", type="primary", use_container_width=True)
 
@@ -162,48 +254,62 @@ st.title("🗺️ 송전망 혼잡도 및 A* 최적 경로 시뮬레이션")
 # --- 3. 엔진 가동 (버튼을 눌렀을 때만 작동) ---
 if submitted:
     with st.spinner("AI가 최적 경로 및 혼잡도를 계산 중입니다... 🔄"):
-        buses = build_default_buses(load_scale=load_scale)
-        lines = build_default_line_inputs()
-        st.session_state.pf_result = solve(buses, lines)
-
-        shared_scenario = _get_shared_scenario()
         shared_created_at = shared_scenario.created_at
+        engine_candidate_ids, user_candidate_points = _split_candidate_selection(
+            selected_candidates,
+            landing_tower_installations,
+        )
 
         sim_input = sim_service.build_default_input(
             scenario=shared_scenario,
             created_at=shared_created_at,
             start_bus_id=start_bus, 
             end_bus_id=end_bus, 
-            candidate_site_ids=selected_candidates, 
+            candidate_site_ids=engine_candidate_ids,
+            user_candidate_points=user_candidate_points,
             load_scale=load_scale
         )
         sim_result = sim_service.run_simulation(
             sim_input,
             created_at=shared_created_at,
         )
+        map_capability = get_map_capability(prefer_webgl=False)
+        map_overlay = _build_map_overlay(
+            sim_result,
+            map_capability=map_capability,
+        )
         
         st.session_state.sim_result = sim_result
-        st.session_state.lines = lines 
+        st.session_state.sim_map_capability = map_capability
+        st.session_state.sim_map_overlay = map_overlay
         st.session_state.sgop_shared_scenario = sim_result.scenario
         st.session_state.selected_candidates = selected_candidates
         st.session_state.sim_run = True
 
 # --- 4. 화면 레이아웃 (계산 완료 상태일 때만 화면 렌더링) ---
 if st.session_state.sim_run:
-    pf_result = st.session_state.pf_result
     sim_result = st.session_state.sim_result
-    lines = st.session_state.lines
+    map_capability = st.session_state.get("sim_map_capability") or get_map_capability(prefer_webgl=False)
+    map_overlay = st.session_state.get("sim_map_overlay")
+    if not isinstance(map_overlay, MapOverlayResult):
+        map_overlay = _build_map_overlay(
+            sim_result,
+            map_capability=map_capability,
+        )
+        st.session_state.sim_map_capability = map_capability
+        st.session_state.sim_map_overlay = map_overlay
     selected_candidates = st.session_state.selected_candidates
+    candidate_count = (
+        len(sim_result.simulation_input.candidate_site_ids)
+        + len(sim_result.simulation_input.user_candidate_points)
+    )
 
     # 팀원들이 추가한 안내 메시지 및 시나리오 캡션
-    if not selected_candidates:
-        st.warning("후보지가 비어 기본 후보지를 사용합니다.")
-
     st.caption(
         f"시나리오: {sim_result.scenario.scenario_id}  |  "
         f"입력: {sim_result.simulation_input.start_bus_id} -> "
         f"{sim_result.simulation_input.end_bus_id}  |  "
-        f"후보지 {len(sim_result.simulation_input.candidate_site_ids)}개  |  "
+        f"후보지 {candidate_count}개  |  "
         f"부하 배율 {sim_result.simulation_input.load_scale:.2f}x  |  "
         f"소스: {sim_result.source.upper()}"
     )
@@ -218,67 +324,32 @@ if st.session_state.sim_run:
 
     with col_map:
         st.subheader("📍 A* 최적 경로 및 계통 혼잡 지도")
-        m = folium.Map(location=[36.5, 127.5], zoom_start=7, tiles='CartoDB positron')
-        
-        bus_coords = {
-            "BUS_001": [37.5665, 126.9780], "BUS_002": [37.4563, 126.7052], 
-            "BUS_003": [37.2636, 127.0286], "BUS_004": [37.8813, 127.7298],
-            "BUS_005": [37.7519, 128.8761], "BUS_006": [37.3422, 127.9202],
-            "BUS_007": [36.3504, 127.3845], "BUS_008": [36.6424, 127.4890],
-            "BUS_009": [35.1595, 126.8526], "BUS_010": [35.8242, 127.1480],
-            "BUS_011": [35.8714, 128.6014], "BUS_012": [35.5384, 129.3114],
-            "BUS_013": [35.1796, 129.0756]
-        }
+        render_map_overlay(
+            map_overlay,
+            map_capability=map_capability,
+            height=650,
+            show_point_table=True,
+        )
+        st.caption(map_overlay.summary)
+        st.caption(
+            f"지도 모드: {map_overlay.metadata.get('rendering_mode')}  |  "
+            f"좌표계: {map_overlay.metadata.get('coordinate_system')}  |  "
+            f"고도: {map_overlay.metadata.get('elevation_source')}"
+        )
 
-        for line in lines:
-            f_num = line.from_bus.replace('B', '')
-            t_num = line.to_bus.replace('B', '')
-            f_bus = f"BUS_{f_num.zfill(3)}"
-            t_bus = f"BUS_{t_num.zfill(3)}"
-            
-            if f_bus in bus_coords and t_bus in bus_coords:
-                current_flow = pf_result.line_flows.get(line.line_id, 0)
-                folium.PolyLine(
-                    locations=[bus_coords[f_bus], bus_coords[t_bus]],
-                    color=get_congestion_color(current_flow, line.capacity_mw),
-                    weight=4, opacity=0.4
-                ).add_to(m)
-
-        if sim_result.selected_route and sim_result.selected_route.waypoints:
-            route_coords = [[wp.latitude, wp.longitude] for wp in sim_result.selected_route.waypoints]
-            
-            folium.PolyLine(
-                locations=route_coords,
-                color="#2563eb",
-                weight=5,
-                dash_array="10",
-                tooltip="추천 A* 신규 송전 경로",
-                opacity=0.9
-            ).add_to(m)
-            
-            for wp in sim_result.selected_route.waypoints:
-                folium.CircleMarker(
-                    location=[wp.latitude, wp.longitude],
-                    radius=6, popup=wp.label, tooltip=wp.label,
-                    color="#2563eb", fill=True, fill_color="#ffffff", fill_opacity=1.0
-                ).add_to(m)
-
-        legend_html = '''
-        <div style="position: fixed; 
-             bottom: 30px; left: 30px; width: 170px; height: 135px; 
-             background-color: rgba(255, 255, 255, 0.95); z-index:9999; font-size:13px;
-             border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px;
-             box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
-             <div style="font-weight: bold; margin-bottom: 5px;">🚥 선로 상태 범례</div>
-             <div style="margin-bottom: 2px;"><span style="color:#22c55e; font-size:16px;">■</span> 원활 (50% 미만)</div>
-             <div style="margin-bottom: 2px;"><span style="color:#eab308; font-size:16px;">■</span> 주의 (50~80%)</div>
-             <div style="margin-bottom: 2px;"><span style="color:#ef4444; font-size:16px;">■</span> 혼잡 (80% 이상)</div>
-             <div><span style="color:#2563eb; font-weight:bold; font-size:16px;">╍</span> 신규 A* 경로</div>
-        </div>
-        '''
-        m.get_root().html.add_child(folium.Element(legend_html))
-
-        st_folium(m, width="100%", height=650, returned_objects=[])
+        overlay_extra_warnings = overlay_warnings_for_display(
+            sim_result.warnings,
+            map_overlay.warnings,
+        )
+        if overlay_extra_warnings:
+            with st.expander("지도 fallback 및 좌표 메타데이터", expanded=False):
+                if map_overlay.fallback.enabled:
+                    st.caption(
+                        f"Fallback: `{map_overlay.fallback.mode}`  |  "
+                        f"{map_overlay.fallback.reason}"
+                    )
+                for warning in overlay_extra_warnings:
+                    st.caption(f"- {warning}")
 
     with col_info:
         # --- 설치 전/후 비교 카드 ---

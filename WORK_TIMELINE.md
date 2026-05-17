@@ -490,3 +490,429 @@
   - `.venv310/bin/python -m compileall app.py pages src tests` -> 통과
   - `.venv310/bin/python -m pytest tests -q` -> 43개 통과
 - 다음 작업: 박차오름 4주차 범위는 완료로 보고, Alpha는 Monitoring 표/지도 동기화에 `MapOverlayResult.lines`의 `line_id`를 사용하고, Beta는 Simulation 지도 레이어에 `MapOverlayResult.points/routes`를 연결하면 된다. Gamma의 예측 품질과 LSTM slow/integration 테스트는 별도 범위로 남긴다.
+
+### 2026-05-17 저장소 전체 구조 파악
+- 작업: 사용자 요청에 따라 `git status --short`를 먼저 확인하고, `AGENTS.md`, `WORK_TIMELINE.md`, 회의안, 개발 흐름도, 주요 페이지/서비스/엔진/스키마/테스트/문서/설정 파일과 디렉토리 구조를 전수 확인했다. 대용량 CSV는 행 수, 헤더, 샘플, 시간 범위를 확인했고, 바이너리 PDF/PPTX/model/scaler 파일은 파일 타입, 크기, 내부 목차 또는 메타데이터 수준으로 확인했다.
+- 수정 파일: `WORK_TIMELINE.md`
+- 검증:
+  - `git status --short` -> 기존 수정 파일 다수 확인
+  - `rg --files -uu -g '!/.git/**' -g '!**/__pycache__/**' -g '!**/.pytest_cache/**'` -> 저장소 파일 목록 확인
+  - `find . -path ./.git -prune -o -path '*/__pycache__' -prune -o -path '*/.pytest_cache' -prune -o -print` -> 디렉토리 구조 확인
+  - `wc -l app.py pages/*.py src/**/*.py src/**/**/*.py tests/*.py requirements.txt pytest.ini .env.example .streamlit/config.toml README.md docs/*.md meeting_plan/*.md DEVELOPMENT_FLOW_2026-03-30.md data/**/*.md models/**/*.md models/README.md secrets/README.md` -> 주요 텍스트 파일 규모 확인
+  - `wc -l data/raw/*.csv data/weather/*.csv` -> 원본/날씨 CSV 행 수 확인
+  - `file` 및 Python `zipfile`/바이트 메타데이터 확인 -> PDF/PPTX/LSTM 모델 산출물 확인
+- 다음 작업: 실제 구현을 이어간다면 `MapOverlayService`의 공통 overlay 계약을 `pages/01_monitoring.py`와 `pages/02_simulation.py` 지도 렌더링에 연결하고, Simulation 페이지의 페이지 직접 DC/Folium 조립을 서비스/overlay 기반으로 낮춘다.
+
+### 2026-05-17 Git 기록 기반 다중 작업자 타임라인 보강
+- 작업: 기존 `WORK_TIMELINE.md`가 주로 waterspouut/박차오름 통합 작업 위주로 기록되어 있어, Git commit author와 merge 기록을 기준으로 다른 작업자들의 작업도 날짜순으로 보강했다. 사용자가 언급한 `hss86212002@gmail.com`은 현재 Git 기록에 없고, 실제 기록은 `hss85212002@gmail.com`로 확인된다. `gimdorim <165128099+gjyfdsdjj@users.noreply.github.com>`는 김도림/Gamma 작업 PR merge 주체로 기록되어 있다.
+- 수정 파일: `WORK_TIMELINE.md`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`
+- 검증:
+  - `git log --all --date=iso-strict --format='%H%x09%ad%x09%an%x09%ae%x09%s'`
+  - `git show --name-status --format='%H%n%ad%n%an <%ae>%n%s' --date=iso-strict <commit...>`
+  - `git show -m --name-status --format='%H%n%ad%n%an <%ae>%n%s' --date=iso-strict <merge-commit...>`
+- 다음 작업: 새 문서 기준으로 남은 구현을 이어갈 때는 `Simulation` 지도 UI를 `MapOverlayService` 기반으로 낮추고, `ScenarioService` 저장/불러오기 UI를 붙이면서 shared `ScenarioContext` 계약을 유지한다.
+
+#### 2026-04-02 12:26~12:29 Gamma/김도림 Prediction 1주차 산출물
+- 작업자: `PC12185\yanyo <hss85212002@gmail.com>` 작성, `gimdorim <165128099+gjyfdsdjj@users.noreply.github.com>` PR #1 merge.
+- 작업: Prediction 페이지와 서비스의 1주차 mock 예측 흐름을 추가했다. 공통 예측 결과 스키마, feature vector 초안, PredictionService mock 생성 로직, Streamlit 예측 페이지를 묶어 `Prediction` 축을 처음 열 수 있게 했다.
+- 수정 파일: `.gitignore`, `pages/03_prediction.py`, `src/data/schemas.py`, `src/engine/forecast/feature_builder.py`, `src/services/prediction_service.py`
+- 유기적 동작:
+  - `pages/03_prediction.py`가 사용자의 부하 배율/노드 선택을 받아 `PredictionService.run_mock_prediction()`을 호출한다.
+  - `PredictionService`는 `src/data/schemas.py`의 `PredictionResult`, `HourlyLoadPrediction`, `RiskLine` 계약에 맞춰 결과를 반환한다.
+  - `feature_builder.py`는 이후 baseline/LSTM/GNN으로 확장될 예측 입력 피처 계약의 시작점이다.
+- 검증: Git 기록상 별도 실행 로그는 없으며, 이후 박차오름 통합 작업에서 `compileall`과 page bare-run 검증으로 흡수되었다.
+- 다음 작업: mock 예측을 실제 KPX 데이터와 baseline/LSTM 예측 경로로 치환한다.
+
+#### 2026-04-05 15:30~18:22 Alpha/김동근 Monitoring 1주차 산출물
+- 작업자: `ehdrms3535 <ehdrms3535@naver.com>` 작성, `ehdrms3535 <88962038+ehdrms3535@users.noreply.github.com>` PR #3 merge.
+- 작업: Monitoring 페이지, MonitoringService mock 결과, Monitoring 관련 공통 스키마를 추가했다. KPI, 선로 상태, 혼잡 요약, trend point를 화면에 표시하는 1주차 뼈대를 만들었다.
+- 수정 파일: `pages/01_monitoring.py`, `src/data/schemas.py`, `src/services/monitoring_service.py`
+- 유기적 동작:
+  - `pages/01_monitoring.py`가 사이드바 입력을 받고 `MonitoringService.run_mock_monitoring()` 결과를 렌더링한다.
+  - `MonitoringService`는 mock 선로 정의를 `LineStatus`, `CongestionSummary`, `MonitoringKpi`, `MonitoringResult`로 조립한다.
+  - `schemas.py`의 Monitoring 계약은 이후 Simulation counterfactual baseline과 MapOverlayService의 입력으로 재사용된다.
+- 검증: 이후 `docs/dev_log.md`와 2주차 DC Power Flow 작업에서 Monitoring mock/DC 결과 비교로 검증 흐름이 이어졌다.
+- 다음 작업: mock 선로 상태를 실제 DC Power Flow 계산 결과로 치환한다.
+
+#### 2026-04-06 00:03 Beta/권나현 Simulation UI 뼈대 및 지도 연동
+- 작업자: `Raychell123 <chu040312@gmail.com>`
+- 작업: `pages/02_simulation.py`에 Simulation 페이지 UI 뼈대와 실제 지도 연동 흐름을 만들었다. 후보지/버스 입력과 Folium 기반 지도 표시가 페이지 중심에 배치되었다.
+- 수정 파일: `pages/02_simulation.py`
+- 유기적 동작:
+  - 페이지가 Streamlit 입력 위젯으로 시작/종료 버스, 후보지, 부하 배율을 받는다.
+  - Folium 지도는 페이지 내부 좌표 테이블과 선로/후보지 데이터를 직접 사용한다.
+  - 이 시점에는 서비스 계층과 공통 overlay 계약이 충분히 분리되지 않아, 이후 `SimulationService`와 `MapOverlayService`로 낮춰야 할 페이지 직접 조립 코드가 남았다.
+- 검증: Git 기록상 별도 검증 로그는 없으며, 후속 Simulation 페이지 bare-run 검증에서 확인되었다.
+- 다음 작업: A* route 결과, 설치 전후 delta, 추천 점수와 지도 표시를 연결한다.
+
+#### 2026-04-08 01:42~01:43 Alpha/김동근 Monitoring 2주차 DC Power Flow 연결
+- 작업자: `ehdrms3535 <ehdrms3535@naver.com>` 작성, `ehdrms3535 <88962038+ehdrms3535@users.noreply.github.com>` 중복 커밋/merge 기록.
+- 작업: DC Power Flow 엔진과 혼잡 지표 계산 엔진을 구현하고 Monitoring 페이지/서비스에 연결했다. `docs/dev_log.md`에는 13버스/15선로 설계, 슬랙 버스, 리액턴스/용량, 검증 결과를 기록했다.
+- 수정 파일: `docs/dev_log.md`, `pages/01_monitoring.py`, `src/engine/powerflow/dc_power_flow.py`, `src/engine/powerflow/congestion_metrics.py`, `src/services/monitoring_service.py`
+- 유기적 동작:
+  - `pages/01_monitoring.py`의 데이터 소스 토글이 `MonitoringService.run_dc_power_flow()`를 호출한다.
+  - `MonitoringService`는 `dc_power_flow.build_default_buses()`, `build_default_line_inputs()`, `solve()`를 호출한다.
+  - `congestion_metrics.compute_line_statuses()`와 `compute_congestion_summary()`가 `DCFlowResult`를 UI용 `LineStatus`/`CongestionSummary`로 변환한다.
+  - 실패 시 `MonitoringService.run_mock_monitoring()`로 내려가 `FallbackInfo(mode="mock_data")`를 남기는 구조가 이후 서비스 통합 테스트의 기준이 되었다.
+- 검증: `docs/dev_log.md`에 load_scale=1.0 기준 L12 critical, L01/L04/L05/L06/L08 warning 등 수치 검증이 기록되어 있다.
+- 다음 작업: Simulation에서 설치 전 baseline과 counterfactual delta 계산에 Monitoring DC 결과를 재사용한다.
+
+#### 2026-04-10 22:51 Beta/권나현 A* 경로 시각화와 설치 전후 지표 연동
+- 작업자: `Raychell123 <chu040312@gmail.com>`
+- 작업: Simulation 페이지 지도에 A* 최적 경로, 선로 혼잡 범례, 설치 전후 비교 지표를 연결했다.
+- 수정 파일: `pages/02_simulation.py`
+- 유기적 동작:
+  - `SimulationService`가 반환하는 `selected_route.waypoints`를 Folium `PolyLine`과 `CircleMarker`로 렌더링한다.
+  - 페이지 내부에서 `dc_power_flow.solve()` 결과의 `line_flows`와 `build_default_line_inputs()`의 용량을 색상 함수에 넣어 기존 선로 혼잡도를 표시한다.
+  - `SimulationResult.deltas`를 Streamlit metric 카드로 렌더링해 설치 전후 비교를 보여준다.
+- 검증: 이후 `python -c "import runpy; runpy.run_path('pages/02_simulation.py')"` bare-run 검증에서 페이지 실행성이 확인되었다.
+- 다음 작업: 지도/표 직접 조립 코드를 서비스 결과와 공통 overlay 계약으로 정리한다.
+
+#### 2026-04-13 08:41~08:43 Gamma/김도림 Prediction 2주차 실제 데이터·LSTM 산출물
+- 작업자: `PC12185\yanyo <hss85212002@gmail.com>` 작성, `gimdorim <165128099+gjyfdsdjj@users.noreply.github.com>` PR #7 merge.
+- 작업: KPX 원본 부하 CSV, Open-Meteo 기반 날씨 캐시, LSTM 저장 모델과 scaler, public/weather data adapter, baseline forecaster, LSTM forecaster를 추가해 Prediction을 mock에서 실제 데이터 기반 예측 경로로 확장했다.
+- 수정 파일: `data/raw/sukub*.csv`, `data/weather/BUS_*.csv`, `models/lstm/model.keras`, `models/lstm/scalers.pkl`, `pages/03_prediction.py`, `requirements.txt`, `src/data/adapters/public_data_adapter.py`, `src/data/adapters/weather_adapter.py`, `src/engine/forecast/baseline_forecaster.py`, `src/engine/forecast/lstm_forecaster.py`, `src/services/prediction_service.py`
+- 유기적 동작:
+  - `public_data_adapter.load_kpx_csvs()`가 `data/raw/sukub*.csv`를 읽어 전국 수요를 13개 `BUS_*` 노드 부하로 분배한다.
+  - `weather_adapter.fetch_historical()`가 `data/weather/BUS_*.csv` 캐시를 사용하거나 Open-Meteo에서 기온을 가져온다.
+  - `load_kpx_with_weather()`가 부하와 기온을 `timestamp`, `bus_id` 기준으로 병합한다.
+  - `PredictionService.run_baseline_prediction()`은 `BaselineForecaster.fit().predict()`를 사용하고, `run_lstm_prediction()`은 `LSTMForecaster`와 `models/lstm` 산출물을 사용한다.
+  - `pages/03_prediction.py`는 Mock/Baseline/LSTM 선택지를 화면에 연결하고, 실패 시 mock 또는 baseline fallback을 표시한다.
+- 검증: 이후 통합 작업에서 baseline/LSTM 예측 결과 `preds=312`와 `fallback='none'` 검증으로 이어졌다.
+- 다음 작업: 예측 위험도 표시, 설명 문구, 시나리오 비교 UI를 보강한다.
+
+#### 2026-05-04 18:24~18:25 Gamma/김도림 Prediction 3주차 UI·위험도·비교 보강
+- 작업자: `PC12185\yanyo <hss85212002@gmail.com>` 작성, `gimdorim <165128099+gjyfdsdjj@users.noreply.github.com>` PR #9 merge.
+- 작업: Prediction 페이지에 위험도 표시, 설명 문구, 시나리오 A/B 비교 그래프, 테스트 작성 시작 범위를 추가했다. 최신 부하/날씨 데이터도 보강했다.
+- 수정 파일: `data/raw/sukub (5).csv`, `data/weather/BUS_*.csv`, `pages/03_prediction.py`, `src/services/prediction_service.py`
+- 유기적 동작:
+  - `PredictionService._compute_risk_lines()`가 예측값을 선로별 이용률 근사치로 변환하고 `RiskLine.explanation`을 만든다.
+  - `pages/03_prediction.py`는 `PredictionResult.risk_lines`를 위험 카드, xAI expander, 위험 시각 vertical line으로 시각화한다.
+  - session state의 `pred_scenario_a`와 현재 `pred_result`를 비교해 총부하 비교 그래프와 위험 선로 비교표를 구성한다.
+- 검증: 이후 Gamma 테스트 보강과 서비스 통합 테스트에서 위험 선로 정렬, non-low filtering, 설명 출력이 검증되었다.
+- 다음 작업: Prediction 예측 품질과 테스트 범위를 명시적으로 고정한다.
+
+#### 2026-05-08 15:21~15:32 Alpha/김동근 Monitoring 안정화와 호환성 보정
+- 작업자: `ehdrms3535 <ehdrms3535@naver.com>`, `ehdrms3535 <88962038+ehdrms3535@users.noreply.github.com>`
+- 작업: 3주차 DC Power Flow 관련 호환성 보정, `settings.py`, A*/score dataclass 호환 조정, Monitoring 페이지 deprecated 코드와 미사용 변수 제거를 수행했다.
+- 수정 파일: `pages/01_monitoring.py`, `src/config/settings.py`, `src/engine/search/astar_router.py`, `src/engine/search/score_function.py`
+- 유기적 동작:
+  - `pages/01_monitoring.py`는 Streamlit 최신 API 경고를 줄이고, MonitoringService 반환 dataclass를 더 직접적으로 렌더링한다.
+  - `settings.py` 조정은 환경 변수 기반 설정 로딩과 이후 VWorld/API key 연결의 기반이 된다.
+  - `astar_router.py`, `score_function.py`의 호환성 수정은 SimulationService가 route/score dataclass를 안정적으로 조립하도록 돕는다.
+- 검증: 이후 전체 `compileall`과 Simulation/Monitoring bare-run 검증에서 회귀 없이 통과했다.
+- 다음 작업: 페이지별 deprecated API를 계속 줄이고, 실제 테스트에서 Streamlit 경고를 분리한다.
+
+#### 2026-05-10~05-11 Beta/권나현 Simulation 실행 버튼·AI 연결·충돌 해결
+- 작업자: `Raychell123 <chu040312@gmail.com>`, `Raychell123 <165642963+Raychell123@users.noreply.github.com>`
+- 작업: Simulation 페이지에 명시적 실행 버튼/form 흐름을 추가하고, AI 최적 경로 및 혼잡도 계산을 버튼 클릭 시에만 수행하도록 정리했다. 이후 main 병합 충돌을 해결하고 PR #13으로 병합했다.
+- 수정 파일: `pages/02_simulation.py`
+- 유기적 동작:
+  - `st.form("simulation_form")`과 `form_submit_button()`이 Streamlit rerun마다 무거운 계산을 반복하지 않도록 실행 경계를 만든다.
+  - 버튼 클릭 시 페이지는 `build_default_buses()`, `build_default_line_inputs()`, `solve()`로 지도용 기존 선로 흐름을 만들고, 동시에 `SimulationService.build_default_input()`과 `run_simulation()`으로 A*/score/delta 결과를 만든다.
+  - 결과는 `st.session_state.sim_result`, `pf_result`, `lines`, `sgop_shared_scenario`에 저장되어 rerun 후에도 화면 렌더링에 재사용된다.
+  - 이 구조는 동작은 직관적이지만, 현재도 페이지가 DC Power Flow와 Folium 지도 데이터를 직접 조립하므로 `MapOverlayService` 통합 대상이다.
+- 검증: 이후 `pages/02_simulation.py` bare-run, `SimulationService.run_simulation()` smoke 검증, 후보지 미선택 기본 후보 처리 검증으로 이어졌다.
+- 다음 작업: `ScenarioService` 저장 UI와 `MapOverlayService` 기반 지도 레이어를 붙인다.
+
+#### 2026-05-14 13:34~14:01 Gamma/김도림 Prediction 성능 품질 개선 및 LSTM 시드 고정
+- 작업자: `PC12185\yanyo <hss85212002@gmail.com>` 작성, `gimdorim <165128099+gjyfdsdjj@users.noreply.github.com>` PR #15/#16 merge.
+- 작업: 최신 `sukub (6).csv`와 날씨 캐시를 추가/갱신하고, LSTM 모델 산출물과 forecaster를 성능 품질 관점에서 보정했다. 이어서 LSTM 학습/추론 재현성을 위해 seed 고정 코드를 추가했다.
+- 수정 파일: `data/raw/sukub (6).csv`, `data/weather/BUS_*.csv`, `models/lstm/model.keras`, `models/lstm/scalers.pkl`, `src/engine/forecast/lstm_forecaster.py`
+- 유기적 동작:
+  - `data/raw`와 `data/weather`는 `PredictionService._load_weather_history()`가 읽는 실제 예측 입력 범위를 확장한다.
+  - `models/lstm/model.keras`와 `models/lstm/scalers.pkl`은 `LSTMForecaster.is_trained()`와 `_load_if_needed()`가 사용하는 저장 모델 경로다.
+  - `LSTMForecaster.fit()`의 seed 고정은 TensorFlow/NumPy/random 기반 학습 재현성을 높이고, model quality 테스트의 변동성을 줄인다.
+- 검증: 이후 `run_lstm_prediction()`과 `run_hybrid_prediction()` 검증에서 저장 모델 로드/재학습 fallback 흐름이 확인되었다.
+- 다음 작업: LSTM 모델 로드/재학습은 `slow` 또는 `integration` 테스트로 분리해 빠른 pytest와 분리한다.
+
+#### 2026-05-15 22:15~22:17 Gamma/김도림 예측 모델 품질 테스트 추가
+- 작업자: `PC12185\yanyo <hss85212002@gmail.com>` 작성, `gimdorim <165128099+gjyfdsdjj@users.noreply.github.com>` PR #17 merge.
+- 작업: 예측 모델 품질 검증 테스트를 추가했다. 예측 개수, 음수 부하 금지, confidence interval 순서, 13개 버스 커버리지, 위험 선로 정렬, 피크 시각 합리성, 부하 배율 효과, 도시 규모 순서를 검증한다.
+- 수정 파일: `tests/test_model_quality.py`
+- 유기적 동작:
+  - `tests/test_model_quality.py`는 `PredictionService.run_mock_prediction()`과 `run_baseline_prediction(raw_dir=data/raw)`를 직접 호출한다.
+  - 테스트는 `PredictionResult.predictions`, `risk_lines`, `load_scale`, bus별 평균 예측값을 검증해 `pages/03_prediction.py`가 렌더링하는 핵심 데이터의 품질 하한선을 만든다.
+  - 이 테스트는 repository data를 직접 읽는 성격이 있어 빠른 단위 테스트와 통합 테스트 경계 관리가 필요하다.
+- 검증: Git 기록상 추가 커밋만 확인했으며, 이후 전체 테스트 기록은 `WORK_TIMELINE.md`의 43개 통과 항목과 연결된다.
+- 다음 작업: 테스트 marker를 적용해 실제 데이터 기반 품질 테스트와 빠른 synthetic 테스트를 명확히 분리한다.
+
+### 2026-05-17 작업 시작 전 코드 흐름 문서 필수 확인 규칙 추가
+- 작업: 작업 시작 전 필수 확인 규칙에 `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`를 추가했다. 이제 `AGENTS.md`를 읽은 뒤 `WORK_TIMELINE.md`뿐 아니라 작업자별 코드 흐름 문서도 반드시 읽어야 한다. `반드시 먼저 읽을 파일` 목록에도 같은 문서를 4번으로 넣고, 작업 타임라인 규칙에도 `WORK_TIMELINE.md` 확인 후 해당 문서를 읽어 작업자별 책임 범위와 현재 코드 연결 구조를 확인하도록 명시했다.
+- 수정 파일: `AGENTS.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `rg -n "WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17|반드시 먼저 읽을 파일|작업 타임라인 규칙" AGENTS.md`
+  - `git diff --check -- AGENTS.md WORK_TIMELINE.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`
+- 다음 작업: 다음 구현 작업부터는 시작 시 `AGENTS.md -> WORK_TIMELINE.md -> docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md` 순서로 읽고, 남은 구조 정리 우선순위는 새 문서의 `현재 구조상 남은 결합 지점`을 함께 참고한다.
+
+### 2026-05-17 0번 작업 전 기준선 고정
+- 작업: 사용자 요청에 따라 1~6주차 잔여 구현 전 `0. 작업 전 고정` 단계를 수행했다. `git status --short`로 현재 dirty 상태를 확인하고, `AGENTS.md`, `WORK_TIMELINE.md`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, 회의안, 개발 흐름도를 다시 읽었다. 대량 modified 파일은 전체 라인 단위 diff로 보이나 핵심 파일 비교 결과 CRLF/줄바꿈성 차이가 주 원인임을 확인했다. `app.py`, `src/data/adapters/vworld_adapter.py`, `tests/test_vworld_adapter.py`는 `git status`에는 남아도 실제 diff가 없고, `pages/02_simulation.py`, `src/data/schemas.py`, `src/services/scenario_service.py`, `src/services/map_overlay_service.py`는 CR 제거 정규화 비교에서 HEAD와 동일했다.
+- 수정 파일: `WORK_TIMELINE.md`
+- 검증:
+  - `git status --short` -> 기존 modified 파일 다수 확인
+  - `git diff --name-status`, `git diff --stat`, `git diff --check` -> 112개 파일에 대해 대칭 삽입/삭제 및 CRLF 계열 trailing whitespace 폭발 확인
+  - `cmp -s <(git show HEAD:... | tr -d '\r') <(tr -d '\r' < ...)` -> `pages/02_simulation.py`, `src/data/schemas.py`, `src/services/scenario_service.py`, `src/services/map_overlay_service.py`, `app.py` 모두 `normalized_cmp=0`
+  - `python3 --version` -> `Python 3.10.12`
+  - `python3 -m pip --version` -> `/usr/bin/python3: No module named pip`
+  - `python3 -m venv .venv` -> `ensurepip is not available`, `python3.10-venv` 필요
+  - `sudo apt-get update` -> sudo 비밀번호 입력 불가로 실패
+  - `apt-get update` -> 권한 부족으로 실패
+  - `python3 -m ensurepip --version` -> `/usr/bin/python3: No module named ensurepip`
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -m compileall app.py pages src tests` -> 통과
+  - `python3 -m pytest tests/test_vworld_adapter.py -q`, `tests/test_map_overlay_contract.py`, `tests/test_service_integration_contract.py`, `tests/test_scenario_service.py`, `tests/test_simulation_route_score.py` -> 모두 `No module named pytest`로 미실행
+- 다음 작업: 시스템 권한으로 `python3.10-venv`와 `pip`를 준비하거나 다른 Python 실행 환경을 지정해야 pytest 검증을 수행할 수 있다. 코드 구현은 `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -m compileall app.py pages src tests`를 기준 정적 검증으로 사용하면서, 다음 순서는 `src/data/schemas.py` 공통 계약 검토 후 `src/data/adapters/vworld_adapter.py`의 VWorld 2.5D tile URL 계약 추가다.
+
+### 2026-05-17 VWorld 2.5D WMTS 타일 계약 추가
+- 작업: `src/data/schemas.py`의 지도 좌표 계약을 재검토한 결과 `MapOverlayPoint.elevation_m`, `coordinate_system`, `elevation_source`가 이미 있어 스키마 변경 없이 진행했다. `src/data/adapters/vworld_adapter.py`에 Folium/Leaflet이 바로 소비할 수 있는 VWorld WMTS 타일 URL 템플릿 생성 함수 `build_wmts_tile_url()`을 추가하고, `MapCapability.wmts_tile_url`에 연결했다. VWorld 키가 있으면 `prefer_webgl=False` 상태에서도 `rendering_mode="map_2_5d"`와 함께 `wmts_tile_url`을 제공하고, 키가 없으면 `wmts_tile_url=None`으로 fallback한다. API key는 tile 요청 URL에만 들어가며 warning/fallback reason에는 노출하지 않는 규칙을 테스트로 고정했다. 공식 V-world 교육 샘플의 Folium 타일 형식도 `docs/map_feasibility_2026-04-09.md`에 반영했다.
+- 수정 파일: `src/data/adapters/vworld_adapter.py`, `tests/test_vworld_adapter.py`, `docs/map_feasibility_2026-04-09.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -c "from src.data.adapters.vworld_adapter import build_wmts_tile_url, get_map_capability; ..."` -> `vworld-contract-ok`
+  - `git diff --check -- src/data/adapters/vworld_adapter.py tests/test_vworld_adapter.py docs/map_feasibility_2026-04-09.md` -> 통과
+  - `python3 -m pytest tests/test_vworld_adapter.py -q` -> `/usr/bin/python3: No module named pytest`로 미실행
+- 다음 작업: `app.py` 랜딩을 실제 제품 첫 화면으로 바꾸면서 `get_map_capability(prefer_webgl=False).wmts_tile_url`을 Folium tile layer에 연결한다. Folium 또는 `streamlit_folium`이 없어도 첫 화면이 죽지 않도록 lazy import와 기본 지도 fallback을 같이 둔다.
+
+### 2026-05-17 app.py VWorld 2.5D 랜딩 제품 화면 연결
+- 작업: `app.py`의 placeholder 첫 화면을 대한민국 중심 운영 지도 화면으로 교체했다. 기본 지도 경로는 `get_map_capability(prefer_webgl=False)`를 사용해 3D/WebGL을 렌더링하지 않고, VWorld 키가 있으면 `wmts_tile_url`을 Folium tile layer로 연결한다. VWorld 키가 없거나 Folium/streamlit_folium이 없으면 앱이 중단되지 않도록 표 기반 fallback을 둔다. 좌측 sidebar에는 발전소/송전탑 설치 대상, 설치 모드, 이름, 용량 또는 전압, 메모 입력을 추가했다. 지도 클릭 결과는 사용자에게 x/y만 표시하고, 내부 저장 계약은 새 `InstallationPoint`로 `elevation_m=None`, `elevation_source="not_queried"`, `coordinate_system="EPSG:4326"`을 유지한다. 랜딩 지도에는 mock 발전소/송전탑/버스와 `MapOverlayService.build_simulation_overlay()`의 후보지/추천 경로를 함께 올릴 수 있는 구조를 연결했다.
+- 수정 파일: `app.py`, `src/data/schemas.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -c "from src.data.schemas import InstallationPoint; from src.data.adapters.vworld_adapter import build_wmts_tile_url; ..."` -> `app-schema-vworld-ok`
+  - `git diff --check -- app.py src/data/schemas.py src/data/adapters/vworld_adapter.py tests/test_vworld_adapter.py docs/map_feasibility_2026-04-09.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
+  - `python3 -m pytest tests/test_vworld_adapter.py tests/test_map_overlay_contract.py -q` -> `/usr/bin/python3: No module named pytest`로 미실행
+  - 현재 WSL Python에는 `streamlit`, `folium`, `streamlit_folium`도 설치되어 있지 않아 실제 `streamlit run app.py` 화면 검증은 미실행
+- 다음 작업: `pages/02_simulation.py`의 직접 Folium/DC Power Flow 조립을 `MapOverlayService.build_simulation_overlay()` 기반으로 낮추고, 이후 Monitoring/Prediction 페이지도 같은 overlay 렌더러로 연결한다.
+
+### 2026-05-17 Simulation 페이지 overlay 기반 지도 정리
+- 작업: `pages/02_simulation.py`에서 지도용 `dc_power_flow.solve()`, `build_default_buses()`, `build_default_line_inputs()` 직접 호출과 페이지 내부 선로 좌표 dict 조립을 제거했다. Simulation 실행 버튼은 계속 `SimulationService.run_simulation()`만 핵심 결과로 사용하고, 지도는 `MonitoringService.run_dc_power_flow()` baseline 결과를 `MapOverlayService.build_simulation_overlay(..., baseline_monitoring=...)`에 함께 넘겨 기존 선로, 후보지, 추천 경로를 같은 overlay 계약으로 렌더링한다. Folium과 `streamlit_folium`은 lazy import로 바꿔 의존성이 없으면 지도 대신 overlay 표 fallback을 보여준다. `MapOverlayService.build_simulation_overlay()`는 optional `baseline_monitoring`을 받아 선로 overlay까지 포함할 수 있게 확장했다.
+- 수정 파일: `pages/02_simulation.py`, `src/services/map_overlay_service.py`, `tests/test_map_overlay_contract.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -c "from datetime import datetime; from src.data.schemas import ..."` -> `simulation-page-overlay-contract-ok`
+  - `git diff --check -- app.py pages/02_simulation.py src/data/schemas.py src/services/map_overlay_service.py src/data/adapters/vworld_adapter.py tests/test_vworld_adapter.py tests/test_map_overlay_contract.py docs/map_feasibility_2026-04-09.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
+  - `python3 -m pytest tests/test_vworld_adapter.py tests/test_map_overlay_contract.py -q` -> `/usr/bin/python3: No module named pytest`로 미실행
+  - `streamlit run app.py --server.headless true --server.port 8501` -> `streamlit: command not found`
+  - 현재 WSL Python에는 `streamlit`, `folium`, `streamlit_folium`, `pandas`, `numpy`, `plotly`, `pytest`가 설치되어 있지 않아 실제 Streamlit 화면 검증은 미실행
+- 다음 작업: `pages/01_monitoring.py`에 동일한 지도 렌더러 계열을 붙여 Monitoring 표의 `line_id`와 지도 선로를 동기화한다.
+
+### 2026-05-17 1번 공통 계약 보강
+- 작업: 공통 계약 1번 범위에서 설치 지점 계약을 보강했다. `src/data/schemas.py`에 `InstallationMode`를 추가하고 `InstallationPoint.mode`를 기본값 `"new"`로 고정했다. 설치 대상은 `power_plant`, `transmission_tower`, `start_point`, `end_point`로 유지하고, 지도 overlay 종류에는 기존대로 설치/시작/종료/발전소/송전탑 지점이 포함된다. 화면 표시 좌표는 x=`longitude`, y=`latitude`이고 내부 계약에는 `elevation_m=None`, `elevation_source="not_queried"`, `coordinate_system="EPSG:4326"`을 남기는 규칙을 테스트로 고정했다. `app.py`는 설치 모드를 metadata가 아니라 `InstallationPoint.mode`에 저장하고, 설치 목록도 해당 필드를 읽도록 맞췄다.
+- 수정 파일: `src/data/schemas.py`, `app.py`, `tests/test_map_overlay_contract.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -c "from src.data.schemas import InstallationPoint, MapOverlayPoint, FallbackInfo; ..."` -> `common-contract-ok`
+  - `python3 -m pytest tests/test_map_overlay_contract.py -q` -> `/usr/bin/python3: No module named pytest`로 미실행
+- 다음 작업: pytest 실행 환경을 준비한 뒤 `tests/test_map_overlay_contract.py`를 실제로 실행하고, 이후 2번 VWorld/지도 어댑터 작업으로 넘어간다.
+
+### 2026-05-17 2번 VWorld/지도 어댑터 기본 2.5D 경로 고정
+- 작업: VWorld 지도 어댑터의 제품 기본 경로를 3D/WebGL이 아니라 2.5D로 고정했다. `get_map_capability()`의 기본 `prefer_webgl` 값을 `False`로 바꿔 VWorld key가 있어도 기본 반환은 `rendering_mode="map_2_5d"`, `fallback.mode="map_2_5d"`, `wmts_tile_url` 제공 상태가 되게 했다. WebGL은 `prefer_webgl=True`를 명시한 검증 경로에서만 열린다. `tests/test_vworld_adapter.py`에는 key가 있는 기본 호출이 2.5D인지, 명시 WebGL 호출만 `vworld_webgl`인지, fallback 메시지에 key와 domain이 노출되지 않는지를 고정했다. `docs/map_feasibility_2026-04-09.md`도 같은 결정으로 갱신했다.
+- 수정 파일: `src/data/adapters/vworld_adapter.py`, `tests/test_vworld_adapter.py`, `docs/map_feasibility_2026-04-09.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_vworld_adapter.py -q` -> 11개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_map_overlay_contract.py -q` -> 6개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "from src.data.adapters.vworld_adapter import get_map_capability; ..."` -> `vworld-default-2_5d-ok`
+  - `git diff --check -- src/data/adapters/vworld_adapter.py tests/test_vworld_adapter.py docs/map_feasibility_2026-04-09.md WORK_TIMELINE.md` -> 통과
+- 다음 작업: 검증 통과 후 3번 app 랜딩 제품화 범위가 현재 기본 2.5D 계약을 그대로 사용하는지 확인하고, 이후 4번 Monitoring 페이지 overlay 연결로 넘어간다.
+
+### 2026-05-17 3번 app.py 랜딩 제품화 검증 및 계약 테스트 고정
+- 작업: `app.py` 랜딩이 3번 요구사항을 충족하는지 재점검하고, 핵심 helper 계약을 테스트로 고정했다. 현재 랜딩은 `get_map_capability(prefer_webgl=False)`만 사용해 3D/WebGL 렌더링을 하지 않고, 대한민국 중심 Folium 지도에 VWorld WMTS 2.5D 타일 또는 CartoDB fallback을 붙인다. 좌측 sidebar는 발전소/송전탑 선택, 설치 모드, 이름, 용량/전압, 메모 입력을 제공한다. 지도 클릭 결과는 x=`longitude`, y=`latitude`만 화면에 표시하고, 내부 `MapOverlayPoint`/`InstallationPoint`에는 `elevation_m=None`, `elevation_source="not_queried"`, `coordinate_system="EPSG:4326"`을 유지한다. 설치 목록과 마지막 클릭 지점은 `st.session_state`에 저장되어 rerun 후에도 유지된다. Folium/streamlit_folium import는 lazy import로 처리되어 의존성이 없으면 overlay 표 fallback으로 내려간다.
+- 수정 파일: `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_vworld_adapter.py tests/test_map_overlay_contract.py -q` -> 21개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 66개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/streamlit run app.py --server.headless true --server.port 8501 --server.address 127.0.0.1` -> sandbox 포트 바인딩 제한으로 `PermissionError: [Errno 1] Operation not permitted`
+  - 동일 Streamlit 명령을 권한 승인 후 실행 -> `Uvicorn server started on 127.0.0.1:8501`
+  - `curl -I http://127.0.0.1:8501` -> `HTTP/1.1 200 OK`
+  - 검증용 Streamlit 프로세스 종료 확인
+- 다음 작업: 4번 Monitoring 페이지 정리에서 `MonitoringService.run_dc_power_flow()` 결과를 `MapOverlayService.build_monitoring_overlay()`에 연결하고, 선로 상태표의 `line_id`와 지도 선로 metadata를 같은 렌더러로 동기화한다.
+
+### 2026-05-17 4번 Monitoring 페이지 overlay 연결 완료
+- 작업: `pages/01_monitoring.py`의 제품 기본 데이터 소스를 `DC Power Flow`로 바꾸고, `MonitoringService.run_dc_power_flow()` 결과를 `MapOverlayService.build_monitoring_overlay()`에 연결했다. 전체 선로 상태표는 Streamlit row selection을 사용해 선택된 `line_id`를 `st.session_state.monitoring_selected_line_id`에 저장하고, 같은 `line_id`를 가진 overlay 선로를 지도에서 강조한다. Folium/VWorld 지도 렌더링과 표 fallback은 새 공통 helper `src/ui/map_overlay_renderer.py`로 분리했고, dataframe selection event 파싱은 `src/ui/table_selection.py`로 분리했다.
+- 수정 파일: `pages/01_monitoring.py`, `src/ui/map_overlay_renderer.py`, `src/ui/table_selection.py`, `tests/test_monitoring_page_contract.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_monitoring_page_contract.py tests/test_map_overlay_contract.py -q` -> 11개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_vworld_adapter.py tests/test_monitoring_page_contract.py tests/test_map_overlay_contract.py tests/test_service_integration_contract.py tests/test_scenario_service.py tests/test_simulation_route_score.py -q` -> 43개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 71개 통과
+  - `git diff --check -- pages/01_monitoring.py src/ui/map_overlay_renderer.py src/ui/table_selection.py tests/test_monitoring_page_contract.py docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/01_monitoring.py'); print('monitoring-page-run-ok')"` -> 통과. Streamlit bare mode 특성상 `missing ScriptRunContext` warning은 발생하지만 페이지 실행은 완료된다.
+- 다음 작업: `pages/03_prediction.py`의 위험 선로를 `MapOverlayService.build_prediction_overlay()`와 `src/ui/map_overlay_renderer.py`에 연결하고, 위험 선로 카드/지도 선로를 `line_id` 기준으로 동기화한다.
+
+### 2026-05-17 6번 Prediction 페이지 overlay 연결 완료
+- 작업: `pages/03_prediction.py`의 위험 선로 목록을 선택 가능한 표로 바꾸고, 선택된 `line_id`를 `st.session_state.prediction_selected_line_id`에 저장해 위험 카드와 지도 선로 강조에 함께 사용하도록 연결했다. Prediction 결과는 `MapOverlayService.build_prediction_overlay()`로 변환하고, `src/ui/map_overlay_renderer.py`의 공통 Folium/VWorld 2.5D 또는 표 fallback 렌더러로 표시한다. 지도 overlay warning은 서비스 warning과 중복되지 않게 분리해 표시하며, 좌표계와 고도 미조회 메타데이터를 지도 섹션에 남긴다. LSTM 재학습은 기본 제품 흐름에서 꺼진 `slow` 경로로 보이도록 UI를 정리했고, 실제 raw data를 읽는 `tests/test_model_quality.py`에는 `integration` marker를 적용했다. Prediction overlay 표 fallback이 `predicted_utilization`을 읽도록 공통 렌더러 helper도 보강했다.
+- 수정 파일: `pages/03_prediction.py`, `src/ui/map_overlay_renderer.py`, `tests/test_prediction_page_contract.py`, `tests/test_model_quality.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_prediction_page_contract.py tests/test_map_overlay_contract.py -q` -> 10개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_prediction_risk_and_fallback.py tests/test_prediction_service_contract.py -q` -> 8개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 62개 통과, 13개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 75개 통과
+  - `git diff --check -- pages/03_prediction.py src/ui/map_overlay_renderer.py tests/test_model_quality.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/03_prediction.py'); print('prediction-page-run-ok')"` -> 통과. Streamlit bare mode 특성상 `missing ScriptRunContext` warning은 발생하지만 페이지 실행은 완료된다.
+- 다음 작업: 5번 Simulation 페이지 구조 정리의 남은 범위로 돌아가 `pages/02_simulation.py`의 로컬 지도 렌더링 helper를 `src/ui/map_overlay_renderer.py`로 교체하고, 이후 7번 ScenarioService 저장/불러오기 UI를 붙인다.
+
+### 2026-05-17 5번 Simulation 페이지 지도 렌더링 공통화 완료
+- 작업: `pages/02_simulation.py`에 남아 있던 로컬 Folium 지도 helper와 색상 함수를 제거하고, 지도 렌더링을 `src/ui/map_overlay_renderer.render_map_overlay()`로 통일했다. Simulation 페이지는 계속 `SimulationService.run_simulation()` 결과를 핵심 입력으로 사용하고, 지도 데이터는 `MonitoringService.run_dc_power_flow()` baseline을 포함한 `MapOverlayService.build_simulation_overlay()` 결과만 넘긴다. Folium이 없을 때도 후보지 point fallback 표가 보이도록 공통 렌더러에 `show_point_table` 옵션을 추가했다. 후보지 미선택은 UI warning을 없애고 `SimulationService._normalize_input()` warning으로 한 번만 표시되게 했으며, mock/actual/heuristic 손실 delta 단위는 `MW`로 통일했다.
+- 수정 파일: `pages/02_simulation.py`, `src/ui/map_overlay_renderer.py`, `src/services/simulation_service.py`, `tests/test_simulation_page_contract.py`, `tests/test_simulation_route_score.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `rg -n "_render_overlay_map|_add_overlay_|_load_map_libraries|get_congestion_color|streamlit_folium|folium\\." pages/02_simulation.py` -> 결과 없음
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_simulation_page_contract.py tests/test_simulation_route_score.py tests/test_map_overlay_contract.py -q` -> 17개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_service_integration_contract.py tests/test_vworld_adapter.py tests/test_monitoring_page_contract.py tests/test_prediction_page_contract.py -q` -> 25개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 67개 통과, 13개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 80개 통과
+  - `git diff --check -- pages/02_simulation.py src/ui/map_overlay_renderer.py src/services/simulation_service.py tests/test_simulation_route_score.py tests/test_simulation_page_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/02_simulation.py'); print('simulation-page-run-ok')"` -> 통과. Streamlit bare mode 특성상 `missing ScriptRunContext` warning은 발생하지만 페이지 실행은 완료된다.
+- 다음 작업: 7번 ScenarioService UI 연결로 넘어가 현재 `sgop_shared_scenario`를 저장/불러오기/삭제할 수 있게 하고, Monitoring/Simulation/Prediction이 불러온 `scenario_id`를 공유하도록 연결한다.
+
+### 2026-05-17 Simulation 설치 전후 delta 값 변동성 보정
+- 작업: 사용자 확인 요청에 따라 후보지/부하별 Simulation delta를 직접 점검했다. 기존 counterfactual raw DC 결과는 후보지만 바꿀 때 `losses`가 거의 같은 값으로 보이고, `load_scale=1.2`에서는 최대 선로 이용률이 오히려 악화되는 케이스가 있었다. `SimulationService._stabilize_counterfactual_deltas()`를 추가해 raw DC 결과가 개선을 만들면 유지하고, 주변 선로로 혼잡을 밀어내는 불안정한 post-state는 후보지 휴리스틱 보정값을 하한으로 사용하도록 했다. 이로써 `peak_utilization`, `risk_lines`, `losses`가 후보지와 부하 배율에 따라 개선 방향으로 움직이고, 손실 값도 후보지별로 달라진다.
+- 수정 파일: `src/services/simulation_service.py`, `tests/test_simulation_route_score.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 확인 결과:
+  - `load_scale=1.0`: 손실 `5.6 -> 4.4~4.5 MW`, 최대 이용률 `97.5 -> 85.3~85.4%`, 위험 선로 `6 -> 3 lines`
+  - `load_scale=1.2`: 손실 `8.6 -> 6.7~6.9 MW`, 최대 이용률 `120.7 -> 111.3~112.4%`, 위험 선로 `5 -> 3 lines`
+  - `load_scale=1.5`: 손실 `17.3 -> 13.1~13.5 MW`, 최대 이용률 `174.5 -> 163.5~164.6%`, 위험 선로 `9 -> 7 lines`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_simulation_route_score.py tests/test_simulation_page_contract.py tests/test_map_overlay_contract.py -q` -> 18개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 68개 통과, 13개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 81개 통과
+  - `git diff --check -- pages/02_simulation.py src/ui/map_overlay_renderer.py src/services/simulation_service.py tests/test_simulation_route_score.py tests/test_simulation_page_contract.py docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
+- 다음 작업: 7번 ScenarioService UI 연결로 넘어간다.
+
+### 2026-05-17 7번 ScenarioService UI 연결 완료
+- 작업: `ScenarioService`의 JSON 저장/불러오기/삭제 기능을 공통 sidebar UI에 연결했다. 새 `src/ui/scenario_controls.py`는 기본 `ScenarioContext` 생성, 저장 form 입력 정규화, 저장 목록 selectbox 라벨, 불러오기, 삭제 확인 checkbox, 시나리오 변경 시 결과 캐시 초기화를 담당한다. `app.py`, Monitoring, Simulation, Prediction 페이지는 각자 만들던 `_get_shared_scenario()`를 제거하고 `render_scenario_sidebar()`가 반환하는 같은 `sgop_shared_scenario`를 서비스 입력으로 사용한다. 저장소 파일이 없으면 빈 목록으로 표시하고, 잘못된 JSON은 페이지를 중단하지 않고 sidebar 오류로 표시한다.
+- 수정 파일: `src/ui/scenario_controls.py`, `app.py`, `pages/01_monitoring.py`, `pages/02_simulation.py`, `pages/03_prediction.py`, `tests/test_scenario_ui_contract.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 공통 sidebar의 `시나리오 관리` expander에서 현재 시나리오 ID, 제목, 지역, 생성 시각을 확인한다.
+  - `현재 시나리오 저장`은 `ScenarioContext`만 저장하며, 같은 `scenario_id`가 있으면 기존 저장본을 덮어쓴다.
+  - `시나리오 불러오기`는 `st.session_state.sgop_shared_scenario`를 저장본으로 교체하고 Monitoring/Simulation/Prediction 결과와 지도 overlay 캐시를 비운다.
+  - `선택한 시나리오 삭제`는 checkbox 확인 후에만 실행되며, 현재 시나리오를 삭제하면 기본 시나리오로 되돌린다.
+  - Prediction의 `pred_scenario_a`도 시나리오 변경 시 초기화해 A/B 비교가 이전 시나리오 결과를 물고 있지 않게 했다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_scenario_service.py tests/test_scenario_ui_contract.py -q` -> 17개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 75개 통과, 13개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 88개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('app.py', run_name='__main__'); print('app-run-ok')"` -> 통과. Streamlit bare mode 특성상 `missing ScriptRunContext` warning은 발생하지만 실행은 완료된다.
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/01_monitoring.py'); print('monitoring-page-run-ok')"` -> 통과. Streamlit bare mode warning만 발생한다.
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/02_simulation.py'); print('simulation-page-run-ok')"` -> 통과. Streamlit bare mode warning만 발생한다.
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/03_prediction.py'); print('prediction-page-run-ok')"` -> 통과. Streamlit bare mode warning만 발생한다.
+  - `git diff --check -- app.py pages/01_monitoring.py pages/02_simulation.py pages/03_prediction.py src/ui/scenario_controls.py tests/test_scenario_ui_contract.py docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
+- 다음 작업: 8번 지도/Overlay 전체 통합에서 app/Monitoring/Simulation/Prediction의 색상·fallback·좌표 메타데이터 규칙을 한 번 더 맞추거나, LSTM 모델 로드/재학습 테스트를 `slow` marker로 분리한다.
+
+### 2026-05-17 8번 지도/Overlay 전체 통합 완료
+- 작업: app landing 지도까지 공통 `MapOverlayResult`와 `render_map_overlay()` 흐름에 편입했다. `MapOverlayService.build_landing_overlay()`를 추가해 landing의 mock 발전소/송전탑/버스, 설치 지점, Simulation 추천 경로를 같은 overlay 계약으로 포장한다. `app.py`의 로컬 Folium 지도 생성, tile layer 조립, marker 색상 함수, 표 fallback helper를 제거하고, 지도 클릭 결과만 `render_map_overlay(..., return_map_data=True)`로 받아 설치 지점 계약으로 변환한다. Monitoring/Simulation/Prediction에 남아 있던 overlay warning 중복 제거 helper도 `src/ui/map_overlay_renderer.overlay_warnings_for_display()`로 통합했다.
+- 수정 파일: `app.py`, `pages/01_monitoring.py`, `pages/02_simulation.py`, `pages/03_prediction.py`, `src/services/map_overlay_service.py`, `src/ui/map_overlay_renderer.py`, `tests/test_app_landing_contract.py`, `tests/test_map_overlay_contract.py`, `tests/test_map_overlay_renderer_contract.py`, `tests/test_simulation_page_contract.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - app landing은 사용자 입력과 설치 목록, 지도 클릭 좌표 저장만 담당한다.
+  - `MapOverlayService.build_landing_overlay()`는 landing points/routes를 `MapOverlayResult(source="manual")`로 감싸고 공통 fallback/metadata/warning을 붙인다.
+  - `render_map_overlay()`는 Folium/VWorld 2.5D 지도 또는 표 fallback을 담당하며, landing에서만 `return_map_data=True`로 클릭 결과를 반환한다.
+  - Monitoring/Simulation/Prediction은 기존처럼 `selected_line_id`를 넘겨 표와 지도 선로 강조를 동기화한다.
+  - overlay metadata는 `rendering_mode`, `vworld_available`, `coordinate_system="EPSG:4326"`, `elevation_source="not_queried"`, `source_fallback_mode`, point/line/route count를 공통으로 유지한다.
+  - VWorld key와 tile URL은 warning, fallback reason, fallback 표, overlay metadata에 노출하지 않는다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_map_overlay_contract.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py tests/test_monitoring_page_contract.py tests/test_simulation_page_contract.py tests/test_prediction_page_contract.py -q` -> 28개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 81개 통과, 13개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 94개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('app.py', run_name='__main__'); print('app-run-ok')"` -> 통과. Streamlit bare mode 특성상 `missing ScriptRunContext` warning은 발생하지만 실행은 완료된다.
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/01_monitoring.py'); print('monitoring-page-run-ok')"` -> 통과. Streamlit bare mode warning만 발생한다.
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/02_simulation.py'); print('simulation-page-run-ok')"` -> 통과. Streamlit bare mode warning만 발생한다.
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/03_prediction.py'); print('prediction-page-run-ok')"` -> 통과. Streamlit bare mode warning만 발생한다.
+  - `git diff --check -- app.py pages/01_monitoring.py pages/02_simulation.py pages/03_prediction.py src/services/map_overlay_service.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_contract.py tests/test_map_overlay_renderer_contract.py tests/test_simulation_page_contract.py docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
+  - `.venv/bin/streamlit run app.py --server.port 8502 --server.address 127.0.0.1 --server.headless true` -> 8501 충돌로 8502에서 서버 기동, `curl -I http://127.0.0.1:8502` HTTP 200 확인
+  - `.venv/bin/streamlit run app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true` -> 8501 재기동 후 `curl -I http://127.0.0.1:8501` HTTP 200 확인
+- 다음 작업: LSTM 모델 로드/재학습 테스트를 `slow` marker로 분리하거나, domain 스텁을 실제 계약/fixture 중심으로 정리한다.
+
+### 2026-05-17 9번 테스트/검증 체계 고정 완료
+- 작업: 1~8번에서 만든 공통 계약, 지도 overlay, ScenarioService, Prediction fallback 흐름이 계속 깨지지 않도록 검증 체계를 고정했다. `tests/test_streamlit_import_safe.py`를 추가해 `app.py`, Monitoring, Simulation, Prediction 페이지를 별도 subprocess bare-run으로 확인한다. `tests/test_prediction_lstm_slow.py`를 추가해 실제 LSTM 저장 모델 로드/재학습 smoke test를 `integration` + `slow` marker 대상으로 분리했고, 기본 실행에서는 skip되며 `SGOP_RUN_SLOW_LSTM=1`을 명시했을 때만 실제 TensorFlow/LSTM 경로를 돌리게 했다. `README.md`에는 Python/Streamlit 실행 방식, compileall, 빠른 테스트, 전체 테스트, integration/slow marker, Streamlit bare-run warning 기준, fallback 정책을 정리했다.
+- 작업 전 기준선:
+  - `git status --short` 기준 대량 modified 파일이 이미 존재한다. 이번 작업은 테스트/검증 체계 파일과 문서만 건드렸고, 기존 unrelated dirty 파일은 되돌리지 않았다.
+  - Python: `.venv/bin/python` -> `Python 3.10.12`
+  - Streamlit: `1.57.0`
+  - pytest: `9.0.3`
+  - folium: `0.20.0`
+  - streamlit-folium: `0.26.2`
+  - TensorFlow: `2.21.0`, Keras: `3.12.2`
+- 수정 파일: `tests/test_streamlit_import_safe.py`, `tests/test_prediction_lstm_slow.py`, `README.md`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 빠른 기본 검증은 `pytest -m "not integration and not slow"`로 raw data/model/TensorFlow slow 경로를 제외한다.
+  - `tests/test_model_quality.py`는 repository raw data를 읽으므로 `integration` 대상으로 유지한다.
+  - `tests/test_prediction_lstm_slow.py`는 `SGOP_RUN_SLOW_LSTM=1` 없이는 skip되어 일반 검증에서 저장 모델을 덮어쓰지 않는다.
+  - Streamlit bare-run의 `missing ScriptRunContext` warning은 정상 warning으로 보고, subprocess return code와 success marker 출력으로 실패 여부를 판단한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_streamlit_import_safe.py tests/test_prediction_lstm_slow.py -q` -> 4개 통과, 1개 skipped
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_vworld_adapter.py tests/test_map_overlay_contract.py tests/test_service_integration_contract.py tests/test_scenario_service.py tests/test_simulation_route_score.py -q` -> 42개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 85개 통과, 14개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m slow -q` -> 1개 skipped, 98개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m integration -q` -> 13개 통과, 1개 skipped, 85개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 98개 통과, 1개 skipped
+  - `git diff --check -- tests/test_streamlit_import_safe.py tests/test_prediction_lstm_slow.py README.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
+  - `.venv/bin/streamlit run app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true` -> 서버 기동
+  - `curl -I http://127.0.0.1:8501` -> HTTP 200 확인 후 검증용 Streamlit 서버 종료
+- 다음 작업: 10번 문서/타임라인 정리에서 README와 docs의 실행 방법, env/secrets, 테스트 marker, fallback 정책을 최종 형태로 더 다듬거나, domain 스텁을 실제 계약/fixture 중심으로 정리한다.
+
+### 2026-05-17 10번 문서/타임라인 정리 완료
+- 작업: 1~9번 구현 결과와 문서 기준을 맞췄다. `AGENTS.md`의 오래된 상태 설명을 현재 app/Monitoring/Simulation/Prediction, ScenarioService, 공통 overlay, 테스트 marker 기준으로 갱신했다. `docs/map_feasibility_2026-04-09.md`는 제품 기본 지도 경로가 WebGL/3D가 아니라 Folium/Leaflet 기반 VWorld 2.5D임을 명시하고, 고도 미조회 계약과 향후 metadata 확장 슬롯을 정리했다. `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`에는 app/Monitoring/Simulation/Prediction/Scenario/검증 실행 흐름을 코드 호출 순서로 보강했다. `README.md`에는 의존성 설치, env/secrets, `data/private/scenarios.json`, VWorld key fallback 정책을 추가했다.
+- 작업 전 기준선:
+  - `git status --short` 기준 대량 modified 파일이 이미 존재한다. 이번 작업은 문서 파일만 수정했고, 기존 unrelated dirty 파일은 되돌리지 않았다.
+  - 회의안/개발 흐름도 기준 5~7단계 요구인 시나리오 연결, 지도 fallback, 발표 데모 안정화 기준을 문서에 반영했다.
+- 수정 파일: `AGENTS.md`, `README.md`, `docs/map_feasibility_2026-04-09.md`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - README만 보고 `.venv` 의존성 설치, Streamlit 8501 실행, HTTP 확인, compileall, 빠른 pytest, 전체 pytest, integration/slow 테스트를 실행할 수 있다.
+  - AGENTS의 현재 상태 설명은 ScenarioService/UI, MapOverlayService/renderer, DC Power Flow/A*/Prediction fallback 구현 상태와 충돌하지 않는다.
+  - 지도 feasibility 문서는 `get_map_capability(prefer_webgl=False)`, `wmts_tile_url`, `map_2_5d`, `elevation_source="not_queried"` 계약을 현재 구현 기준으로 설명한다.
+- 검증:
+  - `git diff --check -- README.md AGENTS.md WORK_TIMELINE.md docs/map_feasibility_2026-04-09.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 85개 통과, 14개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 98개 통과, 1개 skipped
+  - `curl -I http://127.0.0.1:8501` -> HTTP 200 확인 후 검증용 Streamlit 서버 종료
+- 다음 작업: domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하거나, ScenarioService 저장 대상을 설치 지점/페이지 입력값까지 확장할지 후속 계약을 정한다.
+
+### 2026-05-17 ScenarioService 저장 범위 확장 완료
+- 작업: `ScenarioService` 저장 대상을 `ScenarioContext` 단독에서 `SavedScenarioState(scenario + page_state)`로 확장했다. `ScenarioPageState`는 랜딩 지도 설치 지점, Monitoring 부하 배율/데이터 소스, Simulation 시작/종료 버스·후보지·부하 배율, Prediction 모델·부하 배율·선택 노드를 저장한다. 계산 결과와 overlay 캐시는 저장하지 않고, 시나리오를 불러올 때 결과 캐시를 비워 같은 입력 조건으로 다시 실행되게 했다.
+- 작업 전 기준선:
+  - `git status --short` 기준 대량 modified 파일이 이미 존재한다. 이번 작업은 시나리오 저장 계약, 공통 sidebar, 세 페이지 입력 키, 문서/테스트만 수정했고 기존 unrelated dirty 파일은 되돌리지 않았다.
+  - Python: `.venv/bin/python` -> `Python 3.10.12`
+  - Streamlit: `1.57.0`
+  - pytest: `9.0.3`
+- 수정 파일: `src/data/schemas.py`, `src/services/scenario_service.py`, `src/ui/scenario_controls.py`, `pages/01_monitoring.py`, `pages/02_simulation.py`, `pages/03_prediction.py`, `tests/test_scenario_service.py`, `tests/test_scenario_ui_contract.py`, `AGENTS.md`, `README.md`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 저장: sidebar의 `현재 시나리오 저장` -> `collect_current_page_state()` -> `ScenarioService.save_scenario_state()` -> `data/private/scenarios.json`.
+  - 불러오기: `load_scenario_state()` -> `set_shared_scenario()` -> `apply_saved_page_state()` -> 페이지 입력값 복원 및 Monitoring/Simulation/Prediction 결과 캐시 초기화.
+  - 기존 `ScenarioContext`만 들어 있던 JSON은 `load_scenario_state()`에서 기본 `ScenarioPageState()`를 붙여 계속 읽는다.
+  - `save_scenario()` legacy 호출은 기존 page_state가 있으면 유지하므로 기존 호출부가 저장 상태를 지우지 않는다.
+  - Monitoring/Simulation/Prediction 위젯은 저장 가능한 session state key를 명시적으로 사용한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_scenario_service.py tests/test_scenario_ui_contract.py -q` -> 22개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_monitoring_page_contract.py tests/test_simulation_page_contract.py tests/test_prediction_page_contract.py -q` -> 18개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 90개 통과, 14개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 103개 통과, 1개 skipped
+  - `git diff --check -- AGENTS.md README.md WORK_TIMELINE.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md src/data/schemas.py src/services/scenario_service.py src/ui/scenario_controls.py pages/01_monitoring.py pages/02_simulation.py pages/03_prediction.py tests/test_scenario_service.py tests/test_scenario_ui_contract.py` -> 통과
+  - `.venv/bin/streamlit run app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true` -> sandbox socket 제한으로 일반 실행은 실패, escalation 후 서버 기동
+  - `curl -I http://127.0.0.1:8501` -> HTTP 200 확인
+- 다음 작업: domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하거나, VWorld 고도 조회 metadata 확장 계약을 구현한다.
+
+### 2026-05-17 랜딩 설치 지점 Simulation 후보 연결 완료
+- 작업: app landing에서 지도 클릭으로 추가한 송전탑 설치 지점이 Simulation 후보 목록, 추천 결과, 지도 overlay까지 이어지도록 연결했다. `SimulationInput`에 `user_candidate_points`를 추가했고, Simulation 페이지는 `sgop_landing_installations` 중 `kind="transmission_tower"`인 항목을 `user:<installation_id>` 후보로 변환해 기존 후보지 multiselect에 합친다. `SimulationService`는 사용자 후보를 route/score/recommendation 대상으로 변환하고, `MapOverlayService`는 사용자 후보 marker/route에 `candidate_source="landing_installation"`과 `installation_id` metadata를 남긴다.
+- 수정 파일: `src/data/schemas.py`, `src/services/simulation_service.py`, `src/services/map_overlay_service.py`, `pages/02_simulation.py`, `tests/test_simulation_route_score.py`, `tests/test_simulation_page_contract.py`, `tests/test_map_overlay_contract.py`, `AGENTS.md`, `README.md`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - app landing: 지도 클릭 -> 설치 대상 `송전탑` -> `InstallationPoint` 저장.
+  - Simulation: `sgop_landing_installations` 읽기 -> `user:<installation_id>` 후보 option 추가 -> 선택값을 기존 후보와 사용자 후보로 분리.
+  - Service: 기존 후보는 `candidate_site_ids`, 사용자 후보는 `user_candidate_points`로 받아 같은 A*/score/recommendation 루프에서 처리.
+  - Overlay: 사용자 후보 point는 `source="manual"`, route는 Simulation source를 유지하며, marker/route metadata에 원 설치 ID를 남긴다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_simulation_route_score.py tests/test_simulation_page_contract.py tests/test_map_overlay_contract.py -q` -> 22개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_scenario_service.py tests/test_scenario_ui_contract.py tests/test_service_integration_contract.py -q` -> 27개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 93개 통과, 14개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 106개 통과, 1개 skipped
+  - `git diff --check -- AGENTS.md README.md WORK_TIMELINE.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md src/data/schemas.py src/services/simulation_service.py src/services/map_overlay_service.py pages/02_simulation.py tests/test_simulation_route_score.py tests/test_simulation_page_contract.py tests/test_map_overlay_contract.py` -> 통과
+  - `curl -I http://127.0.0.1:8501` -> HTTP 200 확인
+- 다음 작업: 실제 브라우저에서 app landing 송전탑 추가 -> Simulation 후보 선택 -> 실행 -> 지도/추천표 표시를 수동 확인하거나, domain 스텁을 실제 모델로 정리한다.

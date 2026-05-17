@@ -9,6 +9,8 @@ import pytest
 from src.data.schemas import HourlyLoadPrediction, PredictionResult
 from src.services.prediction_service import PredictionService
 
+pytestmark = pytest.mark.integration
+
 _RAW_DIR = str(Path(__file__).resolve().parents[1] / "data" / "raw")
 _N_BUSES = 13
 _HORIZON = 24

@@ -7,41 +7,43 @@
 
 ## 작업 시작 전 필수 확인
 - 먼저 `git status --short`를 확인한다.
-- `AGENTS.md`를 읽었으면 이어서 루트의 `WORK_TIMELINE.md`도 반드시 읽는다.
+- `AGENTS.md`를 읽었으면 이어서 루트의 `WORK_TIMELINE.md`와 `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`도 반드시 읽는다.
 - `지도`, `VWorld`, `랜딩 페이지`, `지도 어댑터`, `좌표`, `2.5D/3D` 관련 작업을 시작할 때는 이 문서의 `랜딩 페이지 지도 UI 필수 요구사항`, `지도 구현 권장 구조`, `지도 구현 중요 포인트`를 다시 읽고 시작한다.
 - 현재 워크트리는 더럽혀져 있을 수 있다. 내가 만들지 않은 변경은 되돌리지 않는다.
-- `Monitoring`, `Simulation` 서비스에는 mock 반환 뼈대가 들어가 있지만, 페이지와 엔진 연결은 아직 대부분 스텁이다.
+- `Monitoring`, `Simulation`, `Prediction`은 실제 최소 엔진/서비스/페이지 연결과 fallback 경로가 함께 유지된다.
 - 현재 구현 기준점은 `Prediction` 쪽이다. 새 기능은 이 흐름을 참고하되, 페이지별 하드코딩을 늘리지 않는다.
 - 외부 API, 실제 데이터, 모델 파일이 없어도 mock 기준으로 동작해야 한다.
-- 작업을 시작할 때는 `WORK_TIMELINE.md`의 최신 항목을 확인하고, 작업이 끝나면 같은 파일에 결과와 검증 내용을 추가한다.
+- 작업을 시작할 때는 `WORK_TIMELINE.md`의 최신 항목과 `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`의 작업자별 코드 흐름을 확인하고, 작업이 끝나면 `WORK_TIMELINE.md`에 결과와 검증 내용을 추가한다.
 
 ## 반드시 먼저 읽을 파일
 1. `meeting_plan/MEETING_PLAN_2026-03-30.md`
 2. `DEVELOPMENT_FLOW_2026-03-30.md`
 3. `WORK_TIMELINE.md`
-4. `src/data/schemas.py`
-5. `app.py`
-6. `pages/03_prediction.py`
-7. `src/services/prediction_service.py`
-8. `pages/01_monitoring.py`
-9. `pages/02_simulation.py`
-10. `src/services/monitoring_service.py`
-11. `src/services/simulation_service.py`
-12. `src/engine/search/astar_router.py`
-13. `src/engine/search/score_function.py`
-14. `src/engine/forecast/feature_builder.py`
-15. `src/config/settings.py`
+4. `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`
+5. `src/data/schemas.py`
+6. `app.py`
+7. `pages/03_prediction.py`
+8. `src/services/prediction_service.py`
+9. `pages/01_monitoring.py`
+10. `pages/02_simulation.py`
+11. `src/services/monitoring_service.py`
+12. `src/services/simulation_service.py`
+13. `src/engine/search/astar_router.py`
+14. `src/engine/search/score_function.py`
+15. `src/engine/forecast/feature_builder.py`
+16. `src/config/settings.py`
 
 ## 현재 저장소 상태
-- `pages/03_prediction.py`와 `src/services/prediction_service.py`는 공통 시나리오와 fallback 메타데이터를 포함한 목업 수준 구현이 있다.
-- `src/services/monitoring_service.py`와 `src/services/simulation_service.py`는 공통 계약 기준의 mock 반환 뼈대가 구현되어 있다.
-- `pages/01_monitoring.py`와 `pages/02_simulation.py`는 서비스 결과를 바로 렌더링하는 mock 페이지가 구현되어 있다.
-- `Monitoring`과 `Simulation` 페이지는 Streamlit session state의 공통 `ScenarioContext`를 공유한다.
-- `Prediction` 페이지도 같은 Streamlit session state의 `ScenarioContext`를 공유한다.
+- `app.py`는 공통 sidebar 시나리오 관리와 대한민국 중심 2.5D 운영 지도를 제공한다.
+- 지도 클릭 좌표는 화면에 x/y만 표시하고, 내부 계약에는 `elevation_m=None`, `elevation_source="not_queried"`, `coordinate_system="EPSG:4326"`를 남긴다.
+- `pages/01_monitoring.py`는 `MonitoringService.run_dc_power_flow()`를 기본 제품 경로로 사용하고, 실패 시 `mock_data` fallback으로 내려간다.
+- `pages/02_simulation.py`는 `SimulationService.run_simulation()` 결과를 핵심 입력으로 사용하고, app 랜딩에서 추가한 송전탑 설치 지점을 `user:<installation_id>` 후보지로 함께 소비한다. A*/score/counterfactual delta 실패 시 `mock_data` fallback을 유지한다.
+- `pages/03_prediction.py`는 Mock/Baseline/LSTM/GNN/LSTM+GNN 경로를 제공하며, 고급 예측 경로 실패 시 baseline 또는 mock fallback으로 전환한다.
+- `src/services/map_overlay_service.py`와 `src/ui/map_overlay_renderer.py`가 app/Monitoring/Simulation/Prediction의 공통 지도 overlay 계약과 렌더링을 담당한다.
+- `src/services/scenario_service.py`와 `src/ui/scenario_controls.py`가 `data/private/scenarios.json` 기반 시나리오 저장/불러오기/삭제 UI를 담당한다. 저장 대상은 `ScenarioContext`와 랜딩 설치 지점, Monitoring/Simulation/Prediction 주요 입력값을 묶은 `SavedScenarioState`다.
+- `Monitoring`, `Simulation`, `Prediction` 페이지는 Streamlit session state의 공통 `ScenarioContext`를 공유한다.
 - `src/data/schemas.py`가 페이지/서비스 간 공통 계약의 기준 파일이다.
-- `data/mock`에는 아직 실제 fixture 파일이 없다.
-- `src/engine/search/astar_router.py`, `src/engine/search/score_function.py`는 1주차용 mock 엔진 계약과 비용 요소 초안이 들어가 있다.
-- `src/domain`, `src/engine/powerflow`의 다수 파일은 여전히 한 줄 스텁이다.
+- `src/domain`, `src/utils`, `src/engine/explain`, `src/engine/optimize`, `src/engine/recommend`에는 아직 스텁 또는 후속 확장 영역이 남아 있다.
 
 ## 잊지 말아야 할 핵심 구조
 - 전체 흐름은 `app.py -> pages/* -> src/services/* -> src/engine/* -> src/data/* / src/domain/*`이다.
@@ -59,6 +61,7 @@
 - `Tower`: 신규 송전탑 후보 지점. 설치 후보와 경로 탐색의 기준 개체다. [tower.py](/mnt/c/Users/smp05/Desktop/SGOP/src/domain/tower.py)
 - `Scenario`: Monitoring, Simulation, Prediction을 묶는 공통 맥락이다. [scenario.py](/mnt/c/Users/smp05/Desktop/SGOP/src/domain/scenario.py)
 - `ScenarioContext`: 현재 공통 스키마에서 시나리오 식별을 담당하는 핵심 메타데이터다. [schemas.py](/mnt/c/Users/smp05/Desktop/SGOP/src/data/schemas.py)
+- `ScenarioPageState`, `SavedScenarioState`: 시나리오 저장 시 랜딩 설치 지점과 페이지 입력값을 함께 보존하는 저장 계약이다.
 - `RiskLine`: 선로 위험도 표현의 기준 타입이다.
 - `RouteResult`: A* 또는 휴리스틱 탐색 결과의 공통 형식이다.
 - `ScoreBreakdown`: 추천 점수의 구성 요소를 담는 타입이다.
@@ -69,7 +72,7 @@
 - `MonitoringService`: 현재 상태, KPI, 혼잡도, 선로 상태, 차트 입력을 만든다.
 - `SimulationService`: 후보지 입력, 경로 결과, 추천 결과, 설치 전후 비교를 만든다.
 - `PredictionService`: baseline, `LSTM`, `GNN` 예측 흐름을 조율하고 부하 예측, 위험 선로, 설명 출력을 만든다.
-- `ScenarioService`: 시나리오 저장/불러오기/비교를 맡을 예정이지만 아직 비어 있다.
+- `ScenarioService`: `ScenarioContext`와 `ScenarioPageState` 저장/불러오기/삭제를 맡고, UI 연결은 `src/ui/scenario_controls.py`가 담당한다.
 - `OptimizationService`: ESS/운영 최적화 확장용이다. MVP 필수 범위는 아니다.
 
 ## 엔진 책임 구조
@@ -167,9 +170,10 @@
 - `warnings` 첫 문구는 가능하면 `"<ServiceName>는 현재 \`<mode>\` fallback 결과를 반환합니다."` 형식을 따른다.
 - `fallback.reason`은 `실제 주 경로 대신 무엇을 사용했는지`를 한 문장으로 설명한다.
 - 현재 서비스별 fallback 기준:
-  - `MonitoringService`: `mock_data`
-  - `SimulationService`: `mock_data`
-  - `PredictionService`: `mock_data`
+  - `MonitoringService`: 실제 DC Power Flow 실패 시 `mock_data`
+  - `SimulationService`: A*/score/counterfactual 실패 시 `mock_data`
+  - `PredictionService`: mock 직접 실행 시 `mock_data`, LSTM/GNN/Hybrid 실패 시 `baseline_model` 또는 mock fallback
+  - 지도/overlay: VWorld WebGL 미사용, VWorld key 없음, Folium 미사용 가능 상태를 `map_2_5d` 또는 표 fallback으로 처리
 
 ## 현재까지 진행된 작업
 - `1순위` 작업으로 공통 계약 스키마를 `src/data/schemas.py`에 추가했다.
@@ -198,19 +202,24 @@
 - `pages/03_prediction.py`는 Streamlit session state의 공통 `ScenarioContext`를 읽고 다시 저장하도록 수정했다.
 - 서비스 인터페이스 미세정리로 `MonitoringService.run_mock_monitoring()`을 public 진입점으로 추가하고, `created_at`를 공통 시간 인자로 맞췄다.
 - fallback 규칙 초안을 `AGENTS.md`에 문서화하고, 세 서비스의 첫 warning 문구를 `mock_data fallback` 형식으로 통일했다.
+- 2026-05-17 기준으로 `InstallationPoint`, VWorld WMTS 2.5D tile 계약, app 랜딩 지도, Monitoring/Simulation/Prediction overlay, `SavedScenarioState` 기반 ScenarioService UI, 테스트 marker 체계가 추가되었다.
+- app/Monitoring/Simulation/Prediction은 모두 공통 `MapOverlayResult`와 `render_map_overlay()` 렌더러를 사용한다.
+- 빠른 테스트는 `pytest -m "not integration and not slow"`로 실행하고, raw data 기반 테스트는 `integration`, LSTM 로드/재학습 테스트는 `slow` marker로 분리한다.
 
 ## 앞으로 작업할 때 우선순위
-1. mock 결과를 실제 엔진 결과로 치환하면서 `warnings`와 `fallback` 규칙을 유지한다.
-2. `A*`, 점수화, power flow 같은 엔진 구현으로 내려간다.
-3. 필요하면 `ScenarioService`에 시나리오 저장/불러오기 책임을 옮긴다.
+1. domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하되 `src/data/schemas.py`와 책임이 겹치지 않게 한다.
+2. 실제 VWorld 고도 조회를 붙이기 전 `elevation_source`, 조회 시각, fallback 여부 metadata를 확장한다.
+3. Scenario 저장 상태에 계산 결과를 포함할지 여부는 별도 계약으로 다룬다. 현재는 입력값만 저장하고 결과 캐시는 불러오기 시 비운다.
 
 ## 작업 타임라인 규칙
 - 작업 타임라인 기준 파일은 루트의 `WORK_TIMELINE.md`다.
 - 새 작업을 시작할 때는 가장 최근 항목을 먼저 읽고 현재 우선순위와 마지막 변경 지점을 확인한다.
+- `WORK_TIMELINE.md`를 읽은 뒤에는 `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`도 반드시 읽고, 작업자별 책임 범위와 현재 코드 연결 구조를 확인한다.
 - 작업 중 의미 있는 변경이 끝나면 `날짜`, `작업 요약`, `수정 파일`, `검증`, `다음 작업`을 한 항목으로 추가한다.
 - `AGENTS.md`의 현재 상태와 `WORK_TIMELINE.md`의 최신 항목이 충돌하면 더 최근 날짜의 `WORK_TIMELINE.md`를 우선 참고하고, 필요하면 `AGENTS.md`도 함께 갱신한다.
 
 ## 검증 규칙
-- 코드 수정 후 최소한 `python3 -m compileall app.py pages src`는 실행한다.
+- 코드 수정 후 최소한 `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests`는 실행한다.
+- 빠른 회귀 검증은 `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q`를 우선 사용한다.
 - 가능하면 수정한 스키마를 import 하는 경로가 깨지지 않는지 확인한다.
 - 테스트가 없으면 없다고 명시하고 끝내지 말고, 최소 정적 검증은 수행한다.
