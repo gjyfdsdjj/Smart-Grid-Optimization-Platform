@@ -84,6 +84,36 @@ _CANDIDATE_COORDINATES: dict[str, _CoordinateSpec] = {
 class MapOverlayService:
     """서비스 결과를 지도 UI가 아닌 공통 overlay 데이터로 변환한다."""
 
+    def build_landing_overlay(
+        self,
+        *,
+        scenario: ScenarioContext,
+        created_at: datetime,
+        points: list[MapOverlayPoint],
+        routes: list[MapOverlayRoute] | None = None,
+        warnings: list[str] | None = None,
+        map_capability: MapCapability | None = None,
+    ) -> MapOverlayResult:
+        capability = _resolve_map_capability(map_capability)
+        route_list = list(routes or [])
+        point_list = list(points)
+        return _build_overlay_result(
+            scenario=scenario,
+            created_at=created_at,
+            source="manual",
+            points=point_list,
+            lines=[],
+            routes=route_list,
+            summary=(
+                f"Landing overlay: 운영 지점 {len(point_list)}개와 "
+                f"추천 경로 {len(route_list)}개를 제공합니다."
+            ),
+            source_warnings=[],
+            local_warnings=list(warnings or []),
+            source_fallback=build_no_fallback_info(),
+            map_capability=capability,
+        )
+
     def build_monitoring_overlay(
         self,
         result: MonitoringResult,

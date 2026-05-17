@@ -320,10 +320,19 @@ app.py
 - 같은 `scenario_id`로 저장하면 `ScenarioService.save_scenario()`가 기존 저장본을 덮어쓴다. 삭제는 checkbox 확인 후에만 실행된다.
 - 저장된 시나리오를 불러온 뒤 Monitoring/Simulation/Prediction은 같은 `sgop_shared_scenario.scenario_id`를 서비스 입력으로 사용한다.
 
+## 2026-05-17 지도/Overlay 전체 통합
+- `src/services/map_overlay_service.py`는 app landing, Monitoring, Simulation, Prediction 결과를 모두 `MapOverlayResult`로 포장한다. landing 전용 `build_landing_overlay()`도 추가되어 app이 더 이상 지도 렌더링용 별도 구조를 만들지 않는다.
+- `src/ui/map_overlay_renderer.py`는 네 화면의 공통 지도 렌더러다. VWorld WMTS tile, CartoDB fallback tile, 선로, 추천 경로, 발전소/송전탑/버스/후보지 marker, 표 fallback을 같은 색상/상태 규칙으로 처리한다.
+- app landing은 `render_map_overlay(..., return_map_data=True)`로 지도 클릭 결과만 돌려받고, 클릭 좌표를 `MapOverlayPoint(kind="install_point")`와 `InstallationPoint`로 변환하는 책임만 가진다.
+- Monitoring/Simulation/Prediction은 `render_map_overlay()` 반환값을 쓰지 않고 overlay 표시만 맡긴다. 선로 선택 동기화는 각 페이지의 표 selection 결과와 `selected_line_id` 인자로 유지된다.
+- 페이지별 warning 중복 제거는 `overlay_warnings_for_display()` 공통 helper로 모았다. 서비스 warning은 페이지 상단, overlay/map warning은 지도 섹션 expander에서 다룬다.
+- app에 있던 로컬 Folium helper, tile layer 조립, marker 색상 함수는 제거되었다. Folium 또는 `streamlit_folium`이 없으면 공통 renderer가 표 fallback을 표시한다.
+- overlay metadata는 `rendering_mode`, `vworld_available`, `coordinate_system="EPSG:4326"`, `elevation_source="not_queried"`, `source_fallback_mode`, point/line/route count를 공통으로 남긴다.
+- VWorld API key와 tile URL은 warning, fallback reason, fallback 표, overlay metadata에 노출하지 않는다.
+
 ## 현재 남은 구조적 갭
-- `app.py`는 VWorld 2.5D WMTS/Folium 랜딩과 설치 지점 저장 흐름을 갖췄지만, Streamlit/folium/streamlit_folium 의존성이 설치되지 않은 현재 WSL 환경에서는 실제 화면 실행 검증이 불가능하다.
-- `pages/01_monitoring.py`와 `pages/02_simulation.py`는 overlay 기반 지도 흐름을 갖췄지만, 실제 지도 클릭과 브라우저 렌더링은 Streamlit 런타임에서 추가 수동 검증이 필요하다.
-- `MapOverlayService`는 Monitoring/Simulation/Prediction overlay 계약을 이미 만들었고 app/Monitoring/Simulation/Prediction 축에 연결되었다. 실제 지도 클릭과 선택 상태 고도화는 Streamlit 런타임 검증 후 별도 보강 대상이다.
+- `app.py`, Monitoring, Simulation, Prediction은 모두 공통 overlay 렌더러를 사용하지만, 실제 지도 클릭과 브라우저 렌더링은 Streamlit 런타임에서 추가 수동 검증이 필요하다.
+- `MapOverlayService`는 app/Monitoring/Simulation/Prediction overlay 계약을 만들지만, 실제 VWorld 호출 품질과 고도 조회는 아직 붙어 있지 않다.
 - `src/domain`, `src/utils`, `src/engine/explain`, `src/engine/optimize`, `src/engine/recommend`는 대부분 한 줄 스텁이다.
 - LSTM 모델 로드/재학습 검증은 아직 `slow` marker 대상으로 별도 분리할 수 있다.
 

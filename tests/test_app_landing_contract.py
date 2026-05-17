@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 import app
 from src.data.schemas import InstallationPoint, MapOverlayPoint
@@ -91,3 +92,27 @@ def test_landing_dedupe_keeps_last_overlay_value():
     assert points[0].label == "갱신 지점"
     assert points[0].latitude == 37.0
     assert points[0].longitude == 128.0
+
+
+def test_landing_page_uses_common_map_overlay_renderer():
+    source = Path(app.__file__).read_text(encoding="utf-8")
+
+    assert "from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay" in source
+    assert "render_map_overlay(" in source
+    assert "return_map_data=True" in source
+    assert "MapOverlayService().build_landing_overlay(" in source
+
+
+def test_landing_page_does_not_keep_local_folium_renderer_helpers():
+    source = Path(app.__file__).read_text(encoding="utf-8")
+    forbidden_fragments = [
+        "def _render_operational_map",
+        "def _load_map_libraries",
+        "def _render_overlay_table",
+        "def _point_style",
+        "def _point_popup_html",
+        "streamlit_folium",
+        "folium.",
+    ]
+
+    assert all(fragment not in source for fragment in forbidden_fragments)

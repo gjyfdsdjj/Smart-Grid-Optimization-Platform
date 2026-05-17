@@ -12,7 +12,7 @@ from src.data.schemas import (
 from src.services.map_overlay_service import MapOverlayService
 from src.services.monitoring_service import MonitoringService
 from src.services.simulation_service import SimulationService
-from src.ui.map_overlay_renderer import render_map_overlay
+from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay
 from src.ui.scenario_controls import render_scenario_sidebar
 
 st.set_page_config(page_title="시뮬레이션 | SGOP", layout="wide")
@@ -138,17 +138,6 @@ def _build_map_overlay(
         map_capability=map_capability,
     )
 
-def _overlay_warnings_for_display(
-    source_warnings: list[str],
-    overlay_warnings: list[str],
-) -> list[str]:
-    source_warning_set = set(source_warnings)
-    return [
-        warning
-        for warning in overlay_warnings
-        if warning not in source_warning_set
-    ]
-
 # --- 2. 사이드바 입력창 (Form으로 묶어서 한 번에 실행!) ---
 with st.sidebar:
     st.header("⚡ 시뮬레이션 제어")
@@ -247,7 +236,7 @@ if st.session_state.sim_run:
             f"고도: {map_overlay.metadata.get('elevation_source')}"
         )
 
-        overlay_extra_warnings = _overlay_warnings_for_display(
+        overlay_extra_warnings = overlay_warnings_for_display(
             sim_result.warnings,
             map_overlay.warnings,
         )

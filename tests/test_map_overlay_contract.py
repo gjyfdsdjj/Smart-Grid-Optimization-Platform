@@ -110,6 +110,41 @@ def test_monitoring_overlay_preserves_line_ids_and_scenario():
     assert any("고도" in warning for warning in overlay.warnings)
 
 
+def test_landing_overlay_wraps_points_and_routes_with_common_metadata():
+    scenario = _scenario()
+    point = MapOverlayPoint(
+        overlay_id="plant:test",
+        label="테스트 발전소",
+        kind="power_plant",
+        latitude=36.45,
+        longitude=127.85,
+        elevation_m=None,
+        coordinate_system="EPSG:4326",
+        elevation_source="not_queried",
+        source="manual",
+    )
+
+    overlay = MapOverlayService().build_landing_overlay(
+        scenario=scenario,
+        created_at=scenario.created_at,
+        points=[point],
+        routes=[],
+        warnings=["landing local warning"],
+        map_capability=_map_2_5d_capability(),
+    )
+
+    assert overlay.scenario.scenario_id == scenario.scenario_id
+    assert overlay.source == "manual"
+    assert overlay.points == [point]
+    assert overlay.routes == []
+    assert overlay.metadata["coordinate_system"] == "EPSG:4326"
+    assert overlay.metadata["elevation_source"] == "not_queried"
+    assert overlay.metadata["point_count"] == 1
+    assert overlay.metadata["line_count"] == 0
+    assert overlay.metadata["route_count"] == 0
+    assert "landing local warning" in overlay.warnings
+
+
 def test_simulation_overlay_exposes_candidate_points_and_ranked_routes():
     scenario = _scenario()
     service = SimulationService()
@@ -193,7 +228,12 @@ def test_overlay_fallback_messages_do_not_expose_vworld_key():
         map_capability=capability,
     )
     messages = [overlay.fallback.reason, *overlay.warnings]
+    metadata_values = [str(value) for value in overlay.metadata.values()]
 
     assert overlay.fallback.mode == "map_2_5d"
     assert overlay.metadata["vworld_available"] is True
     assert all(secret_key not in message for message in messages)
+    assert "wmts_tile_url" not in overlay.metadata
+    assert all(secret_key not in value for value in metadata_values)
+    assert capability.wmts_tile_url is not None
+    assert all(capability.wmts_tile_url not in value for value in metadata_values)

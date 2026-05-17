@@ -802,3 +802,27 @@
   - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/03_prediction.py'); print('prediction-page-run-ok')"` -> 통과. Streamlit bare mode warning만 발생한다.
   - `git diff --check -- app.py pages/01_monitoring.py pages/02_simulation.py pages/03_prediction.py src/ui/scenario_controls.py tests/test_scenario_ui_contract.py docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
 - 다음 작업: 8번 지도/Overlay 전체 통합에서 app/Monitoring/Simulation/Prediction의 색상·fallback·좌표 메타데이터 규칙을 한 번 더 맞추거나, LSTM 모델 로드/재학습 테스트를 `slow` marker로 분리한다.
+
+### 2026-05-17 8번 지도/Overlay 전체 통합 완료
+- 작업: app landing 지도까지 공통 `MapOverlayResult`와 `render_map_overlay()` 흐름에 편입했다. `MapOverlayService.build_landing_overlay()`를 추가해 landing의 mock 발전소/송전탑/버스, 설치 지점, Simulation 추천 경로를 같은 overlay 계약으로 포장한다. `app.py`의 로컬 Folium 지도 생성, tile layer 조립, marker 색상 함수, 표 fallback helper를 제거하고, 지도 클릭 결과만 `render_map_overlay(..., return_map_data=True)`로 받아 설치 지점 계약으로 변환한다. Monitoring/Simulation/Prediction에 남아 있던 overlay warning 중복 제거 helper도 `src/ui/map_overlay_renderer.overlay_warnings_for_display()`로 통합했다.
+- 수정 파일: `app.py`, `pages/01_monitoring.py`, `pages/02_simulation.py`, `pages/03_prediction.py`, `src/services/map_overlay_service.py`, `src/ui/map_overlay_renderer.py`, `tests/test_app_landing_contract.py`, `tests/test_map_overlay_contract.py`, `tests/test_map_overlay_renderer_contract.py`, `tests/test_simulation_page_contract.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - app landing은 사용자 입력과 설치 목록, 지도 클릭 좌표 저장만 담당한다.
+  - `MapOverlayService.build_landing_overlay()`는 landing points/routes를 `MapOverlayResult(source="manual")`로 감싸고 공통 fallback/metadata/warning을 붙인다.
+  - `render_map_overlay()`는 Folium/VWorld 2.5D 지도 또는 표 fallback을 담당하며, landing에서만 `return_map_data=True`로 클릭 결과를 반환한다.
+  - Monitoring/Simulation/Prediction은 기존처럼 `selected_line_id`를 넘겨 표와 지도 선로 강조를 동기화한다.
+  - overlay metadata는 `rendering_mode`, `vworld_available`, `coordinate_system="EPSG:4326"`, `elevation_source="not_queried"`, `source_fallback_mode`, point/line/route count를 공통으로 유지한다.
+  - VWorld key와 tile URL은 warning, fallback reason, fallback 표, overlay metadata에 노출하지 않는다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_map_overlay_contract.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py tests/test_monitoring_page_contract.py tests/test_simulation_page_contract.py tests/test_prediction_page_contract.py -q` -> 28개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 81개 통과, 13개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 94개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('app.py', run_name='__main__'); print('app-run-ok')"` -> 통과. Streamlit bare mode 특성상 `missing ScriptRunContext` warning은 발생하지만 실행은 완료된다.
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/01_monitoring.py'); print('monitoring-page-run-ok')"` -> 통과. Streamlit bare mode warning만 발생한다.
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/02_simulation.py'); print('simulation-page-run-ok')"` -> 통과. Streamlit bare mode warning만 발생한다.
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/03_prediction.py'); print('prediction-page-run-ok')"` -> 통과. Streamlit bare mode warning만 발생한다.
+  - `git diff --check -- app.py pages/01_monitoring.py pages/02_simulation.py pages/03_prediction.py src/services/map_overlay_service.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_contract.py tests/test_map_overlay_renderer_contract.py tests/test_simulation_page_contract.py docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
+  - `.venv/bin/streamlit run app.py --server.port 8502 --server.address 127.0.0.1 --server.headless true` -> 8501 충돌로 8502에서 서버 기동, `curl -I http://127.0.0.1:8502` HTTP 200 확인
+  - `.venv/bin/streamlit run app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true` -> 8501 재기동 후 `curl -I http://127.0.0.1:8501` HTTP 200 확인
+- 다음 작업: LSTM 모델 로드/재학습 테스트를 `slow` marker로 분리하거나, domain 스텁을 실제 계약/fixture 중심으로 정리한다.

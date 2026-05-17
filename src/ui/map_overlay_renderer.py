@@ -34,14 +34,15 @@ def render_map_overlay(
     height: int = 620,
     width: int = 1200,
     show_point_table: bool = False,
-) -> None:
+    return_map_data: bool = False,
+) -> dict[str, Any] | None:
     """Render an overlay map without exposing provider secrets in UI messages."""
 
     folium, st_folium, import_error = _load_map_libraries()
     if import_error is not None:
         st.warning(f"지도 라이브러리 fallback: {import_error}")
         render_overlay_fallback_tables(overlay, show_points=show_point_table)
-        return
+        return None
 
     folium_map = folium.Map(
         location=_map_center(overlay),
@@ -64,7 +65,16 @@ def render_map_overlay(
         _add_overlay_point(folium, folium_map, point)
 
     folium.LayerControl(collapsed=True).add_to(folium_map)
-    st_folium(folium_map, width=width, height=height, returned_objects=[])
+    returned_objects = ["last_clicked"] if return_map_data else []
+    map_data = st_folium(
+        folium_map,
+        width=width,
+        height=height,
+        returned_objects=returned_objects,
+    )
+    if return_map_data:
+        return map_data
+    return None
 
 
 def render_overlay_fallback_tables(
@@ -127,6 +137,19 @@ def line_utilization_from_overlay_line(line: MapOverlayLine) -> float:
         return float(raw_value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def overlay_warnings_for_display(
+    source_warnings: list[str],
+    overlay_warnings: list[str],
+) -> list[str]:
+    """Return overlay-only warnings without repeating service warnings."""
+    source_warning_set = set(source_warnings)
+    return [
+        warning
+        for warning in overlay_warnings
+        if warning not in source_warning_set
+    ]
 
 
 def line_style_for_status(status: str, *, selected: bool = False) -> dict[str, Any]:
@@ -214,7 +237,7 @@ def _add_overlay_route(folium: Any, folium_map: Any, route: MapOverlayRoute) -> 
 
 
 def _add_overlay_point(folium: Any, folium_map: Any, point: MapOverlayPoint) -> None:
-    style = _point_style(point)
+    style = point_style_for_overlay_point(point)
     folium.CircleMarker(
         location=[point.latitude, point.longitude],
         radius=style["radius"],
@@ -228,7 +251,7 @@ def _add_overlay_point(folium: Any, folium_map: Any, point: MapOverlayPoint) -> 
     ).add_to(folium_map)
 
 
-def _point_style(point: MapOverlayPoint) -> dict[str, Any]:
+def point_style_for_overlay_point(point: MapOverlayPoint) -> dict[str, Any]:
     if point.status == "selected":
         return {"color": "#7c3aed", "fill_color": "#a78bfa", "fill_opacity": 0.95, "radius": 9, "weight": 3}
     if point.kind == "tower_candidate":

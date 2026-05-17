@@ -14,9 +14,10 @@ from src.data.schemas import (
     InstallationTargetKind,
     MapOverlayPoint,
     MapOverlayResult,
-    MapOverlayRoute,
     ScenarioContext,
 )
+from src.services.map_overlay_service import MapOverlayService
+from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay
 from src.ui.scenario_controls import render_scenario_sidebar
 
 
@@ -44,9 +45,6 @@ _INSTALLATION_MODE_LABEL: dict[InstallationMode, str] = {
     "review": "검토",
 }
 
-_KOREA_CENTER = [36.45, 127.85]
-
-
 def main() -> None:
     st.set_page_config(
         page_title="SGOP",
@@ -57,6 +55,7 @@ def main() -> None:
 
     scenario = render_scenario_sidebar()
     map_capability = get_map_capability(prefer_webgl=False)
+    st.session_state.sgop_landing_has_vworld_tiles = bool(map_capability.wmts_tile_url)
     service_overlay, overlay_warning = _get_service_overlay(scenario, map_capability)
 
     selected_kind, mode, name, capacity_mw, voltage_kv, notes = _render_left_panel()
@@ -88,8 +87,6 @@ def main() -> None:
 
     if map_capability.fallback.enabled:
         st.caption(f"Fallback: `{map_capability.fallback.mode}`")
-    if overlay_warning:
-        st.caption(overlay_warning)
 
     summary_cols = st.columns(4)
     summary_cols[0].metric("설치 지점", f"{len(st.session_state.sgop_landing_installations)}개")
@@ -99,15 +96,42 @@ def main() -> None:
 
     overlay_points = _build_landing_points(service_overlay)
     overlay_routes = service_overlay.routes if service_overlay is not None else []
-
-    map_data = _render_operational_map(
-        map_capability=map_capability,
+    landing_overlay = MapOverlayService().build_landing_overlay(
+        scenario=scenario,
+        created_at=scenario.created_at or datetime.now().replace(minute=0, second=0, microsecond=0),
         points=overlay_points,
         routes=overlay_routes,
+        warnings=[overlay_warning] if overlay_warning else [],
+        map_capability=map_capability,
+    )
+
+    map_data = render_map_overlay(
+        landing_overlay,
+        map_capability=map_capability,
+        height=650,
+        show_point_table=True,
+        return_map_data=True,
     )
     clicked_point = _extract_clicked_point(map_data)
     if clicked_point is not None:
         st.session_state.sgop_landing_last_click = clicked_point
+
+    st.caption(landing_overlay.summary)
+    st.caption(
+        f"지도 모드: {landing_overlay.metadata.get('rendering_mode')}  |  "
+        f"좌표계: {landing_overlay.metadata.get('coordinate_system')}  |  "
+        f"고도: {landing_overlay.metadata.get('elevation_source')}"
+    )
+    overlay_extra_warnings = overlay_warnings_for_display([], landing_overlay.warnings)
+    if overlay_extra_warnings:
+        with st.expander("지도 fallback 및 좌표 메타데이터", expanded=False):
+            if landing_overlay.fallback.enabled:
+                st.caption(
+                    f"Fallback: `{landing_overlay.fallback.mode}`  |  "
+                    f"{landing_overlay.fallback.reason}"
+                )
+            for warning in overlay_extra_warnings:
+                st.caption(f"- {warning}")
 
     _render_selected_point()
     _render_installation_table()
@@ -326,91 +350,6 @@ def _build_mock_grid_points() -> list[MapOverlayPoint]:
     ]
 
 
-def _render_operational_map(
-    *,
-    map_capability: MapCapability,
-    points: list[MapOverlayPoint],
-    routes: list[MapOverlayRoute],
-) -> dict[str, Any] | None:
-    folium, st_folium, import_error = _load_map_libraries()
-    if import_error is not None:
-        st.warning(f"지도 라이브러리 fallback: {import_error}")
-        _render_overlay_table(points)
-        return None
-
-    folium_map = folium.Map(
-        location=_KOREA_CENTER,
-        zoom_start=7,
-        tiles=None,
-        control_scale=True,
-    )
-
-    if map_capability.wmts_tile_url:
-        st.session_state.sgop_landing_has_vworld_tiles = True
-        folium.TileLayer(
-            tiles=map_capability.wmts_tile_url,
-            attr="공간정보 오픈플랫폼(브이월드)",
-            name="VWorld 2.5D",
-            overlay=False,
-            control=True,
-        ).add_to(folium_map)
-    else:
-        st.session_state.sgop_landing_has_vworld_tiles = False
-        folium.TileLayer(
-            tiles="CartoDB positron",
-            name="Fallback 2D",
-            overlay=False,
-            control=True,
-        ).add_to(folium_map)
-
-    for route in routes:
-        route_locations = [
-            [point.latitude, point.longitude]
-            for point in route.points
-        ]
-        if len(route_locations) < 2:
-            continue
-        folium.PolyLine(
-            locations=route_locations,
-            color="#2563eb" if route.rank == 1 else "#64748b",
-            weight=5 if route.rank == 1 else 3,
-            opacity=0.88 if route.rank == 1 else 0.45,
-            tooltip=route.label,
-        ).add_to(folium_map)
-
-    for point in points:
-        style = _point_style(point)
-        folium.CircleMarker(
-            location=[point.latitude, point.longitude],
-            radius=style["radius"],
-            color=style["color"],
-            fill=True,
-            fill_color=style["fill_color"],
-            fill_opacity=style["fill_opacity"],
-            weight=style["weight"],
-            tooltip=point.label,
-            popup=_point_popup_html(point),
-        ).add_to(folium_map)
-
-    folium.LayerControl(collapsed=True).add_to(folium_map)
-    return st_folium(
-        folium_map,
-        height=650,
-        width=1200,
-        returned_objects=["last_clicked"],
-    )
-
-
-def _load_map_libraries() -> tuple[Any | None, Any | None, str | None]:
-    try:
-        import folium
-        from streamlit_folium import st_folium
-
-        return folium, st_folium, None
-    except Exception as exc:  # noqa: BLE001
-        return None, None, str(exc)
-
-
 def _extract_clicked_point(map_data: dict[str, Any] | None) -> MapOverlayPoint | None:
     if not isinstance(map_data, dict):
         return None
@@ -531,49 +470,6 @@ def _render_installation_table() -> None:
             }
         )
     st.dataframe(rows, use_container_width=True, hide_index=True)
-
-
-def _render_overlay_table(points: list[MapOverlayPoint]) -> None:
-    rows = [
-        {
-            "구분": _kind_label(point.kind),
-            "이름": point.label,
-            "x": round(point.longitude, 6),
-            "y": round(point.latitude, 6),
-            "상태": point.status,
-        }
-        for point in points
-    ]
-    st.dataframe(rows, use_container_width=True, hide_index=True)
-
-
-def _point_style(point: MapOverlayPoint) -> dict[str, Any]:
-    if point.status == "selected":
-        return {
-            "color": "#7c3aed",
-            "fill_color": "#a78bfa",
-            "fill_opacity": 0.95,
-            "radius": 9,
-            "weight": 3,
-        }
-    if point.kind == "power_plant":
-        return {"color": "#b91c1c", "fill_color": "#ef4444", "fill_opacity": 0.9, "radius": 8, "weight": 2}
-    if point.kind == "transmission_tower":
-        return {"color": "#1d4ed8", "fill_color": "#60a5fa", "fill_opacity": 0.9, "radius": 7, "weight": 2}
-    if point.kind == "tower_candidate":
-        return {"color": "#047857", "fill_color": "#34d399", "fill_opacity": 0.88, "radius": 7, "weight": 2}
-    if point.kind == "bus":
-        return {"color": "#334155", "fill_color": "#cbd5e1", "fill_opacity": 0.85, "radius": 6, "weight": 2}
-    return {"color": "#475569", "fill_color": "#94a3b8", "fill_opacity": 0.85, "radius": 6, "weight": 2}
-
-
-def _point_popup_html(point: MapOverlayPoint) -> str:
-    return (
-        f"<strong>{point.label}</strong><br>"
-        f"x: {point.longitude:.6f}<br>"
-        f"y: {point.latitude:.6f}<br>"
-        f"kind: {_kind_label(point.kind)}"
-    )
 
 
 def _kind_label(kind: str) -> str:

@@ -11,7 +11,7 @@ from src.data.adapters.vworld_adapter import get_map_capability
 from src.data.schemas import PredictionResult, ScenarioContext
 from src.services.map_overlay_service import MapOverlayService
 from src.services.prediction_service import PredictionService
-from src.ui.map_overlay_renderer import render_map_overlay
+from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay
 from src.ui.scenario_controls import render_scenario_sidebar
 from src.ui.table_selection import selected_value_from_dataframe_event
 
@@ -108,15 +108,6 @@ def _run_prediction_with_fallback(
             f"{model_source} 예측이 실패해 mock 패턴 예측 결과를 사용합니다. 원인: {exc}"
         )
         return fallback_result
-
-
-def _overlay_warnings_for_display(result: PredictionResult, overlay_warnings: list[str]) -> list[str]:
-    source_warnings = set(result.warnings)
-    return [
-        warning
-        for warning in overlay_warnings
-        if warning not in source_warnings
-    ]
 
 
 def _risk_line_rows(result: PredictionResult) -> list[dict]:
@@ -555,7 +546,7 @@ if prediction_overlay.lines:
         f"고도: {prediction_overlay.metadata.get('elevation_source')}"
     )
 
-    overlay_extra_warnings = _overlay_warnings_for_display(result, prediction_overlay.warnings)
+    overlay_extra_warnings = overlay_warnings_for_display(result.warnings, prediction_overlay.warnings)
     if overlay_extra_warnings:
         with st.expander("지도 fallback 및 좌표 메타데이터", expanded=False):
             if prediction_overlay.fallback.enabled:

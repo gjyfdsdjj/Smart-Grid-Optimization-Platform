@@ -9,7 +9,7 @@ from src.data.adapters.vworld_adapter import get_map_capability
 from src.data.schemas import MonitoringKpi, MonitoringResult, ScenarioContext
 from src.services.map_overlay_service import MapOverlayService
 from src.services.monitoring_service import MonitoringService
-from src.ui.map_overlay_renderer import render_map_overlay
+from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay
 from src.ui.scenario_controls import render_scenario_sidebar
 from src.ui.table_selection import selected_value_from_dataframe_event
 
@@ -83,15 +83,6 @@ def _load_monitoring_result(
     except Exception as exc:  # noqa: BLE001
         st.error(f"모니터링 결과 생성 실패: {exc}")
         st.stop()
-
-
-def _overlay_warnings_for_display(result: MonitoringResult, overlay_warnings: list[str]) -> list[str]:
-    source_warnings = set(result.warnings)
-    return [
-        warning
-        for warning in overlay_warnings
-        if warning not in source_warnings
-    ]
 
 
 def _resolve_selected_line_id(selection_event: object, rows: list[dict]) -> str | None:
@@ -317,7 +308,7 @@ st.caption(
     f"고도: {map_overlay.metadata.get('elevation_source')}"
 )
 
-overlay_extra_warnings = _overlay_warnings_for_display(result, map_overlay.warnings)
+overlay_extra_warnings = overlay_warnings_for_display(result.warnings, map_overlay.warnings)
 if overlay_extra_warnings:
     with st.expander("지도 fallback 및 좌표 메타데이터", expanded=False):
         if map_overlay.fallback.enabled:
