@@ -714,3 +714,28 @@
   - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "from src.data.adapters.vworld_adapter import get_map_capability; ..."` -> `vworld-default-2_5d-ok`
   - `git diff --check -- src/data/adapters/vworld_adapter.py tests/test_vworld_adapter.py docs/map_feasibility_2026-04-09.md WORK_TIMELINE.md` -> 통과
 - 다음 작업: 검증 통과 후 3번 app 랜딩 제품화 범위가 현재 기본 2.5D 계약을 그대로 사용하는지 확인하고, 이후 4번 Monitoring 페이지 overlay 연결로 넘어간다.
+
+### 2026-05-17 3번 app.py 랜딩 제품화 검증 및 계약 테스트 고정
+- 작업: `app.py` 랜딩이 3번 요구사항을 충족하는지 재점검하고, 핵심 helper 계약을 테스트로 고정했다. 현재 랜딩은 `get_map_capability(prefer_webgl=False)`만 사용해 3D/WebGL 렌더링을 하지 않고, 대한민국 중심 Folium 지도에 VWorld WMTS 2.5D 타일 또는 CartoDB fallback을 붙인다. 좌측 sidebar는 발전소/송전탑 선택, 설치 모드, 이름, 용량/전압, 메모 입력을 제공한다. 지도 클릭 결과는 x=`longitude`, y=`latitude`만 화면에 표시하고, 내부 `MapOverlayPoint`/`InstallationPoint`에는 `elevation_m=None`, `elevation_source="not_queried"`, `coordinate_system="EPSG:4326"`을 유지한다. 설치 목록과 마지막 클릭 지점은 `st.session_state`에 저장되어 rerun 후에도 유지된다. Folium/streamlit_folium import는 lazy import로 처리되어 의존성이 없으면 overlay 표 fallback으로 내려간다.
+- 수정 파일: `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_vworld_adapter.py tests/test_map_overlay_contract.py -q` -> 21개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 66개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/streamlit run app.py --server.headless true --server.port 8501 --server.address 127.0.0.1` -> sandbox 포트 바인딩 제한으로 `PermissionError: [Errno 1] Operation not permitted`
+  - 동일 Streamlit 명령을 권한 승인 후 실행 -> `Uvicorn server started on 127.0.0.1:8501`
+  - `curl -I http://127.0.0.1:8501` -> `HTTP/1.1 200 OK`
+  - 검증용 Streamlit 프로세스 종료 확인
+- 다음 작업: 4번 Monitoring 페이지 정리에서 `MonitoringService.run_dc_power_flow()` 결과를 `MapOverlayService.build_monitoring_overlay()`에 연결하고, 선로 상태표의 `line_id`와 지도 선로 metadata를 같은 렌더러로 동기화한다.
+
+### 2026-05-17 4번 Monitoring 페이지 overlay 연결 완료
+- 작업: `pages/01_monitoring.py`의 제품 기본 데이터 소스를 `DC Power Flow`로 바꾸고, `MonitoringService.run_dc_power_flow()` 결과를 `MapOverlayService.build_monitoring_overlay()`에 연결했다. 전체 선로 상태표는 Streamlit row selection을 사용해 선택된 `line_id`를 `st.session_state.monitoring_selected_line_id`에 저장하고, 같은 `line_id`를 가진 overlay 선로를 지도에서 강조한다. Folium/VWorld 지도 렌더링과 표 fallback은 새 공통 helper `src/ui/map_overlay_renderer.py`로 분리했고, dataframe selection event 파싱은 `src/ui/table_selection.py`로 분리했다.
+- 수정 파일: `pages/01_monitoring.py`, `src/ui/map_overlay_renderer.py`, `src/ui/table_selection.py`, `tests/test_monitoring_page_contract.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_monitoring_page_contract.py tests/test_map_overlay_contract.py -q` -> 11개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_vworld_adapter.py tests/test_monitoring_page_contract.py tests/test_map_overlay_contract.py tests/test_service_integration_contract.py tests/test_scenario_service.py tests/test_simulation_route_score.py -q` -> 43개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 71개 통과
+  - `git diff --check -- pages/01_monitoring.py src/ui/map_overlay_renderer.py src/ui/table_selection.py tests/test_monitoring_page_contract.py docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/01_monitoring.py'); print('monitoring-page-run-ok')"` -> 통과. Streamlit bare mode 특성상 `missing ScriptRunContext` warning은 발생하지만 페이지 실행은 완료된다.
+- 다음 작업: `pages/03_prediction.py`의 위험 선로를 `MapOverlayService.build_prediction_overlay()`와 `src/ui/map_overlay_renderer.py`에 연결하고, 위험 선로 카드/지도 선로를 `line_id` 기준으로 동기화한다.

@@ -298,20 +298,22 @@ app.py
 ## 2026-05-17 랜딩·Simulation 지도 연결 보강
 - `app.py`는 VWorld 2.5D WMTS tile URL을 사용해 대한민국 중심 운영 지도를 표시한다.
 - 사용자가 지도에서 선택한 지점은 `InstallationPoint`로 저장되며, 화면에는 x/y만 표시하고 내부에는 고도 미조회 상태를 남긴다.
+- `pages/01_monitoring.py`는 `MonitoringService.run_dc_power_flow()`를 제품 기본 데이터 소스로 사용하고, 결과를 `MapOverlayService.build_monitoring_overlay()`에 연결해 선로 지도와 상태표를 같은 `line_id` 기준으로 동기화한다.
 - `pages/02_simulation.py`는 더 이상 페이지 안에서 `dc_power_flow.solve()`와 선로 좌표 dict를 직접 조립하지 않고, `MonitoringService.run_dc_power_flow()` 결과를 `MapOverlayService.build_simulation_overlay(..., baseline_monitoring=...)`에 넘겨 기존 선로/후보지/추천 경로를 같은 overlay 계약으로 렌더링한다.
+- `src/ui/map_overlay_renderer.py`는 `MapOverlayResult`를 Folium/VWorld 2.5D 지도 또는 표 fallback으로 렌더링하는 공통 UI helper다. 현재 Monitoring 페이지가 사용하며, Simulation/Prediction 페이지도 후속으로 같은 렌더러에 맞춰 낮출 수 있다.
 - Folium 또는 `streamlit_folium`이 없으면 지도 대신 overlay 표를 표시한다.
 
 ## 현재 남은 구조적 갭
 - `app.py`는 VWorld 2.5D WMTS/Folium 랜딩과 설치 지점 저장 흐름을 갖췄지만, Streamlit/folium/streamlit_folium 의존성이 설치되지 않은 현재 WSL 환경에서는 실제 화면 실행 검증이 불가능하다.
-- `pages/02_simulation.py`는 overlay 기반으로 낮췄지만, 현재 WSL 환경에서는 Streamlit/Folium 의존성이 없어 실제 지도 클릭과 화면 렌더링 검증이 불가능하다.
-- `MapOverlayService`는 Monitoring/Simulation/Prediction overlay 계약을 이미 만들고 `app.py`와 Simulation 페이지에 연결되었지만, Monitoring/Prediction 개별 페이지에는 아직 충분히 연결되지 않았다.
+- `pages/01_monitoring.py`와 `pages/02_simulation.py`는 overlay 기반 지도 흐름을 갖췄지만, 실제 지도 클릭과 브라우저 렌더링은 Streamlit 런타임에서 추가 수동 검증이 필요하다.
+- `MapOverlayService`는 Monitoring/Simulation/Prediction overlay 계약을 이미 만들었고 Monitoring/app/Simulation 축에 연결되었지만, Prediction 개별 페이지에는 아직 충분히 연결되지 않았다.
 - `ScenarioService`는 JSON 저장/조회/삭제 서비스와 테스트가 있지만, 페이지 UI에는 저장/불러오기 흐름이 없다.
 - `src/domain`, `src/utils`, `src/engine/explain`, `src/engine/optimize`, `src/engine/recommend`는 대부분 한 줄 스텁이다.
 - `tests/test_model_quality.py`는 실제 raw data를 사용하므로 빠른 테스트와 통합 테스트를 marker로 분리하는 편이 맞다.
 
 ## 다음 구현 권장 순서
-1. `pages/01_monitoring.py`에 Monitoring overlay를 연결해 표의 `line_id`와 지도 선로 id를 동기화한다.
-2. `pages/03_prediction.py` 위험 선로를 `MapOverlayService.build_prediction_overlay()` 기반 지도 섹션과 연결한다.
+1. `pages/03_prediction.py` 위험 선로를 `MapOverlayService.build_prediction_overlay()` 기반 지도 섹션과 연결한다.
+2. `pages/02_simulation.py`의 로컬 지도 렌더링 helper를 `src/ui/map_overlay_renderer.py`로 교체해 Monitoring과 색상/상태 규칙을 맞춘다.
 3. `ScenarioService` 저장/불러오기 UI를 Simulation 또는 공통 sidebar에 붙인다.
 4. Prediction 품질 테스트에 `integration` marker를 적용하고 빠른 synthetic 테스트와 분리한다.
 5. domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하되, 먼저 `schemas.py`와 중복되는 책임 경계를 정한다.
