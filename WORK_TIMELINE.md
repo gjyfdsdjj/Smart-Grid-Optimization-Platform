@@ -781,3 +781,24 @@
   - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 81개 통과
   - `git diff --check -- pages/02_simulation.py src/ui/map_overlay_renderer.py src/services/simulation_service.py tests/test_simulation_route_score.py tests/test_simulation_page_contract.py docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
 - 다음 작업: 7번 ScenarioService UI 연결로 넘어간다.
+
+### 2026-05-17 7번 ScenarioService UI 연결 완료
+- 작업: `ScenarioService`의 JSON 저장/불러오기/삭제 기능을 공통 sidebar UI에 연결했다. 새 `src/ui/scenario_controls.py`는 기본 `ScenarioContext` 생성, 저장 form 입력 정규화, 저장 목록 selectbox 라벨, 불러오기, 삭제 확인 checkbox, 시나리오 변경 시 결과 캐시 초기화를 담당한다. `app.py`, Monitoring, Simulation, Prediction 페이지는 각자 만들던 `_get_shared_scenario()`를 제거하고 `render_scenario_sidebar()`가 반환하는 같은 `sgop_shared_scenario`를 서비스 입력으로 사용한다. 저장소 파일이 없으면 빈 목록으로 표시하고, 잘못된 JSON은 페이지를 중단하지 않고 sidebar 오류로 표시한다.
+- 수정 파일: `src/ui/scenario_controls.py`, `app.py`, `pages/01_monitoring.py`, `pages/02_simulation.py`, `pages/03_prediction.py`, `tests/test_scenario_ui_contract.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 공통 sidebar의 `시나리오 관리` expander에서 현재 시나리오 ID, 제목, 지역, 생성 시각을 확인한다.
+  - `현재 시나리오 저장`은 `ScenarioContext`만 저장하며, 같은 `scenario_id`가 있으면 기존 저장본을 덮어쓴다.
+  - `시나리오 불러오기`는 `st.session_state.sgop_shared_scenario`를 저장본으로 교체하고 Monitoring/Simulation/Prediction 결과와 지도 overlay 캐시를 비운다.
+  - `선택한 시나리오 삭제`는 checkbox 확인 후에만 실행되며, 현재 시나리오를 삭제하면 기본 시나리오로 되돌린다.
+  - Prediction의 `pred_scenario_a`도 시나리오 변경 시 초기화해 A/B 비교가 이전 시나리오 결과를 물고 있지 않게 했다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_scenario_service.py tests/test_scenario_ui_contract.py -q` -> 17개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 75개 통과, 13개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 88개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('app.py', run_name='__main__'); print('app-run-ok')"` -> 통과. Streamlit bare mode 특성상 `missing ScriptRunContext` warning은 발생하지만 실행은 완료된다.
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/01_monitoring.py'); print('monitoring-page-run-ok')"` -> 통과. Streamlit bare mode warning만 발생한다.
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/02_simulation.py'); print('simulation-page-run-ok')"` -> 통과. Streamlit bare mode warning만 발생한다.
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import runpy; runpy.run_path('pages/03_prediction.py'); print('prediction-page-run-ok')"` -> 통과. Streamlit bare mode warning만 발생한다.
+  - `git diff --check -- app.py pages/01_monitoring.py pages/02_simulation.py pages/03_prediction.py src/ui/scenario_controls.py tests/test_scenario_ui_contract.py docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
+- 다음 작업: 8번 지도/Overlay 전체 통합에서 app/Monitoring/Simulation/Prediction의 색상·fallback·좌표 메타데이터 규칙을 한 번 더 맞추거나, LSTM 모델 로드/재학습 테스트를 `slow` marker로 분리한다.

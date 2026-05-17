@@ -1,5 +1,4 @@
 from __future__ import annotations
-from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -7,7 +6,6 @@ import streamlit as st
 from src.data.adapters.vworld_adapter import MapCapability, get_map_capability
 from src.data.schemas import (
     MapOverlayResult,
-    ScenarioContext,
     ScoreBreakdown,
     SimulationResult,
 )
@@ -15,6 +13,7 @@ from src.services.map_overlay_service import MapOverlayService
 from src.services.monitoring_service import MonitoringService
 from src.services.simulation_service import SimulationService
 from src.ui.map_overlay_renderer import render_map_overlay
+from src.ui.scenario_controls import render_scenario_sidebar
 
 st.set_page_config(page_title="시뮬레이션 | SGOP", layout="wide")
 
@@ -26,23 +25,7 @@ def get_service():
 sim_service = get_service()
 overlay_service = MapOverlayService()
 monitoring_service = MonitoringService()
-
-def _get_shared_scenario() -> ScenarioContext:
-    scenario = st.session_state.get("sgop_shared_scenario")
-    if isinstance(scenario, ScenarioContext):
-        return scenario
-
-    created_at = datetime.now().replace(minute=0, second=0, microsecond=0)
-    scenario = ScenarioContext(
-        scenario_id="sgop-demo-scenario",
-        title="SGOP Demo Scenario",
-        description="Monitoring, Simulation, Prediction이 공유하는 기본 시나리오",
-        region="South Korea",
-        created_at=created_at,
-        created_by="streamlit-session",
-    )
-    st.session_state.sgop_shared_scenario = scenario
-    return scenario
+shared_scenario = render_scenario_sidebar()
 
 bus_options = sim_service.list_bus_options()
 candidate_options = sim_service.list_candidate_options()
@@ -190,7 +173,6 @@ st.title("🗺️ 송전망 혼잡도 및 A* 최적 경로 시뮬레이션")
 # --- 3. 엔진 가동 (버튼을 눌렀을 때만 작동) ---
 if submitted:
     with st.spinner("AI가 최적 경로 및 혼잡도를 계산 중입니다... 🔄"):
-        shared_scenario = _get_shared_scenario()
         shared_created_at = shared_scenario.created_at
 
         sim_input = sim_service.build_default_input(

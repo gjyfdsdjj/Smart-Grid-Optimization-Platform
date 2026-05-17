@@ -312,15 +312,22 @@ app.py
 - Folium 또는 `streamlit_folium`이 없으면 지도 대신 overlay 표를 표시한다.
 - `tests/test_model_quality.py`는 `integration` marker가 적용되어 빠른 테스트 명령에서는 제외할 수 있다.
 
+## 2026-05-17 ScenarioService UI 연결
+- `src/services/scenario_service.py`는 `data/private/scenarios.json`에 `ScenarioContext`를 저장, 조회, 목록화, 삭제한다. 저장소 파일이 없으면 빈 목록으로 처리하고, 잘못된 JSON은 `ValueError`로 UI에 전달된다.
+- `src/ui/scenario_controls.py`는 공통 sidebar의 `시나리오 관리` expander를 담당한다. 기본 시나리오 생성, 저장 입력 정규화, 저장 목록 라벨, 불러오기, 삭제 확인, 시나리오 변경 시 결과 캐시 초기화를 한 곳에 모았다.
+- `app.py`, `pages/01_monitoring.py`, `pages/02_simulation.py`, `pages/03_prediction.py`는 더 이상 각자 `_get_shared_scenario()`를 만들지 않고 `render_scenario_sidebar()`에서 받은 `ScenarioContext`를 사용한다.
+- 시나리오를 불러오거나 현재 시나리오를 삭제하면 Monitoring 결과/overlay, Simulation 결과/overlay, Prediction 결과/overlay, Prediction A/B 비교 캐시가 초기화된다. 따라서 새 `scenario_id`에서 이전 결과가 계속 표시되지 않는다.
+- 같은 `scenario_id`로 저장하면 `ScenarioService.save_scenario()`가 기존 저장본을 덮어쓴다. 삭제는 checkbox 확인 후에만 실행된다.
+- 저장된 시나리오를 불러온 뒤 Monitoring/Simulation/Prediction은 같은 `sgop_shared_scenario.scenario_id`를 서비스 입력으로 사용한다.
+
 ## 현재 남은 구조적 갭
 - `app.py`는 VWorld 2.5D WMTS/Folium 랜딩과 설치 지점 저장 흐름을 갖췄지만, Streamlit/folium/streamlit_folium 의존성이 설치되지 않은 현재 WSL 환경에서는 실제 화면 실행 검증이 불가능하다.
 - `pages/01_monitoring.py`와 `pages/02_simulation.py`는 overlay 기반 지도 흐름을 갖췄지만, 실제 지도 클릭과 브라우저 렌더링은 Streamlit 런타임에서 추가 수동 검증이 필요하다.
 - `MapOverlayService`는 Monitoring/Simulation/Prediction overlay 계약을 이미 만들었고 app/Monitoring/Simulation/Prediction 축에 연결되었다. 실제 지도 클릭과 선택 상태 고도화는 Streamlit 런타임 검증 후 별도 보강 대상이다.
-- `ScenarioService`는 JSON 저장/조회/삭제 서비스와 테스트가 있지만, 페이지 UI에는 저장/불러오기 흐름이 없다.
 - `src/domain`, `src/utils`, `src/engine/explain`, `src/engine/optimize`, `src/engine/recommend`는 대부분 한 줄 스텁이다.
 - LSTM 모델 로드/재학습 검증은 아직 `slow` marker 대상으로 별도 분리할 수 있다.
 
 ## 다음 구현 권장 순서
-1. `ScenarioService` 저장/불러오기 UI를 Simulation 또는 공통 sidebar에 붙인다.
-2. LSTM 모델 로드/재학습 테스트를 `slow` marker로 분리한다.
-3. domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하되, 먼저 `schemas.py`와 중복되는 책임 경계를 정한다.
+1. LSTM 모델 로드/재학습 테스트를 `slow` marker로 분리한다.
+2. domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하되, 먼저 `schemas.py`와 중복되는 책임 경계를 정한다.
+3. ScenarioService가 현재는 `ScenarioContext`만 저장하므로, 설치 지점과 페이지 입력값까지 시나리오 저장 대상에 포함할지 후속 계약을 정한다.

@@ -17,6 +17,7 @@ from src.data.schemas import (
     MapOverlayRoute,
     ScenarioContext,
 )
+from src.ui.scenario_controls import render_scenario_sidebar
 
 
 _TARGET_KIND_BY_LABEL: dict[str, InstallationTargetKind] = {
@@ -54,7 +55,7 @@ def main() -> None:
     )
     _init_landing_state()
 
-    scenario = _get_shared_scenario()
+    scenario = render_scenario_sidebar()
     map_capability = get_map_capability(prefer_webgl=False)
     service_overlay, overlay_warning = _get_service_overlay(scenario, map_capability)
 
@@ -119,24 +120,6 @@ def _init_landing_state() -> None:
         st.session_state.sgop_landing_last_click = None
     if "sgop_landing_add_requested" not in st.session_state:
         st.session_state.sgop_landing_add_requested = False
-
-
-def _get_shared_scenario() -> ScenarioContext:
-    scenario = st.session_state.get("sgop_shared_scenario")
-    if isinstance(scenario, ScenarioContext):
-        return scenario
-
-    created_at = datetime.now().replace(minute=0, second=0, microsecond=0)
-    scenario = ScenarioContext(
-        scenario_id="sgop-demo-scenario",
-        title="SGOP Demo Scenario",
-        description="Monitoring, Simulation, Prediction이 공유하는 기본 시나리오",
-        region="South Korea",
-        created_at=created_at,
-        created_by="streamlit-session",
-    )
-    st.session_state.sgop_shared_scenario = scenario
-    return scenario
 
 
 def _render_left_panel() -> tuple[

@@ -1,7 +1,7 @@
 # 미래 부하 예측 결과를 보여주는 페이지를 구성한다.
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -12,6 +12,7 @@ from src.data.schemas import PredictionResult, ScenarioContext
 from src.services.map_overlay_service import MapOverlayService
 from src.services.prediction_service import PredictionService
 from src.ui.map_overlay_renderer import render_map_overlay
+from src.ui.scenario_controls import render_scenario_sidebar
 from src.ui.table_selection import selected_value_from_dataframe_event
 
 # ── 페이지 설정 ────────────────────────────────────────────────────────────────
@@ -41,24 +42,6 @@ _RISK_LABEL = {
     "high":     "🟠 경고",
     "medium":   "🟡 주의",
 }
-
-
-def _get_shared_scenario() -> ScenarioContext:
-    scenario = st.session_state.get("sgop_shared_scenario")
-    if isinstance(scenario, ScenarioContext):
-        return scenario
-
-    created_at = datetime.now().replace(minute=0, second=0, microsecond=0)
-    scenario = ScenarioContext(
-        scenario_id="sgop-demo-scenario",
-        title="SGOP Demo Scenario",
-        description="Monitoring, Simulation, Prediction이 공유하는 기본 시나리오",
-        region="South Korea",
-        created_at=created_at,
-        created_by="streamlit-session",
-    )
-    st.session_state.sgop_shared_scenario = scenario
-    return scenario
 
 
 def _run_prediction_with_fallback(
@@ -164,6 +147,8 @@ _RAW_DIR = str(
     __import__("pathlib").Path(__file__).resolve().parents[1] / "data" / "raw"
 )
 
+shared_scenario = render_scenario_sidebar()
+
 # ── 사이드바 ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("예측 설정")
@@ -240,7 +225,6 @@ if "pred_scenario_a" not in st.session_state:
     st.session_state.pred_scenario_a = None
 
 # ── 예측 실행 (버튼 or 최초 진입) ─────────────────────────────────────────────
-shared_scenario = _get_shared_scenario()
 cached_result = st.session_state.pred_result
 
 source_changed = (

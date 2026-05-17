@@ -1,8 +1,6 @@
 # 송전망 혼잡 상태를 보여주는 모니터링 페이지를 구성한다.
 from __future__ import annotations
 
-from datetime import datetime
-
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -12,6 +10,7 @@ from src.data.schemas import MonitoringKpi, MonitoringResult, ScenarioContext
 from src.services.map_overlay_service import MapOverlayService
 from src.services.monitoring_service import MonitoringService
 from src.ui.map_overlay_renderer import render_map_overlay
+from src.ui.scenario_controls import render_scenario_sidebar
 from src.ui.table_selection import selected_value_from_dataframe_event
 
 # ── 상수 ──────────────────────────────────────────────────────────────────────
@@ -34,23 +33,6 @@ _STATUS_LABEL: dict[str, str] = {
 # ── 페이지 설정 ────────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="모니터링 | SGOP", layout="wide")
-
-# ── 공유 시나리오 헬퍼 ─────────────────────────────────────────────────────────
-
-def _get_shared_scenario() -> ScenarioContext:
-    scenario = st.session_state.get("sgop_shared_scenario")
-    if isinstance(scenario, ScenarioContext):
-        return scenario
-    scenario = ScenarioContext(
-        scenario_id="sgop-demo-scenario",
-        title="SGOP Demo Scenario",
-        description="Monitoring과 Simulation이 공유하는 기본 시나리오",
-        region="South Korea",
-        created_at=datetime.now().replace(minute=0, second=0, microsecond=0),
-        created_by="streamlit-session",
-    )
-    st.session_state.sgop_shared_scenario = scenario
-    return scenario
 
 
 def _fmt_kpi_value(kpi: MonitoringKpi) -> str:
@@ -75,6 +57,7 @@ def _fmt_kpi_delta(kpi: MonitoringKpi) -> str | None:
 
 service = MonitoringService()
 overlay_service = MapOverlayService()
+shared_scenario = render_scenario_sidebar()
 
 
 def _load_monitoring_result(
@@ -156,7 +139,7 @@ with st.spinner("모니터링 결과를 생성하는 중입니다..."):
     result: MonitoringResult = _load_monitoring_result(
         service=service,
         data_source=data_source,
-        scenario=_get_shared_scenario(),
+        scenario=shared_scenario,
         load_scale=load_scale,
     )
 
