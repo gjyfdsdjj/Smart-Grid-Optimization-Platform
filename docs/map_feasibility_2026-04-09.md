@@ -6,9 +6,10 @@
 - 기본 fallback: `map_2_5d`
 
 ## 근거
-- `src/data/adapters/vworld_adapter.py`는 `2026-05-11` 기준으로 VWorld WebGL script URL 생성과 `map_2_5d` fallback 판단을 제공한다.
-- 저장소에는 `VWorld`를 실제로 호출하는 어댑터, 지도 상태 서비스, 랜딩 지도 페이지가 없다.
-- `x, y, z` 좌표와 고도 조회 정책은 문서화되어 있지만, 실제 세션 상태/캐시/오버레이 구현은 아직 없다.
+- `src/data/adapters/vworld_adapter.py`는 VWorld WebGL script URL 생성, WMTS 2.5D tile URL 생성, `map_2_5d` fallback 판단을 제공한다.
+- `app.py`는 `get_map_capability(prefer_webgl=False)`를 사용해 제품 기본 지도 경로를 2.5D로 고정한다.
+- `src/services/map_overlay_service.py`와 `src/ui/map_overlay_renderer.py`가 app/Monitoring/Simulation/Prediction의 지도 overlay 계약과 렌더링을 공통으로 담당한다.
+- 고도 조회는 아직 실제 API로 연결하지 않았으며, 현재 내부 계약은 `elevation_m=None`, `elevation_source="not_queried"`, `coordinate_system="EPSG:4326"`를 유지한다.
 - 회의안과 개발 흐름도 모두 `3D 실패 시 2.5D fallback`을 허용한다.
 
 ## 최종 판단
@@ -34,7 +35,15 @@
 - VWorld 키가 없으면 `wmts_tile_url=None`으로 두고 앱/페이지는 Folium 기본 타일 또는 mock 지도 상태로 내려가야 한다.
 - tile URL 자체에는 요청에 필요한 API key가 포함되므로 화면의 warning, fallback reason, overlay metadata에는 이 URL을 그대로 노출하지 않는다.
 
+## 2026-05-17 제품 기본 지도 경로
+- 현재 제품 기본 지도 경로는 VWorld WebGL/3D가 아니라 Folium/Leaflet 기반 2.5D 지도다.
+- WebGL은 `get_map_capability(prefer_webgl=True)`를 명시한 경우에만 실험 경로로 사용한다.
+- VWorld API key가 없거나 Folium 렌더링이 실패해도 앱은 중단되지 않고 `map_2_5d` 또는 표 fallback으로 내려간다.
+- app landing, Monitoring, Simulation, Prediction은 모두 `MapOverlayResult`를 렌더링 입력으로 사용한다.
+- app landing의 지도 클릭 결과는 `MapOverlayPoint(kind="install_point")`와 `InstallationPoint`로 변환되며, 화면에는 x/y만 표시한다.
+- 향후 고도 조회를 붙일 때는 `elevation_source`, 조회 시각, fallback 여부를 overlay/service metadata에 추가한다.
+
 ## 후속 규칙
 - 지도 계열 기능이 추가될 때 `warnings` 첫 문구와 `fallback.mode`는 `map_2_5d`를 사용한다.
 - 계산용 좌표 계약은 계속 `x, y, z` 확장 가능성을 유지하고, 화면 렌더링만 `2.5D/2D`로 낮춘다.
-- Beta가 지도 UI를 붙일 때는 기본적으로 `get_map_capability()`와 `wmts_tile_url`을 사용해 2.5D 지도를 만들고, 3D 검증 작업에서만 `get_map_capability(prefer_webgl=True)` 또는 `build_webgl_script_url()`을 사용한다.
+- 지도 UI를 붙일 때는 기본적으로 `get_map_capability(prefer_webgl=False)`와 `wmts_tile_url`을 사용해 2.5D 지도를 만들고, 3D 검증 작업에서만 `get_map_capability(prefer_webgl=True)` 또는 `build_webgl_script_url()`을 사용한다.

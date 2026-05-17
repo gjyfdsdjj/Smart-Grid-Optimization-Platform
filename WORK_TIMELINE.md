@@ -855,3 +855,21 @@
   - `.venv/bin/streamlit run app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true` -> 서버 기동
   - `curl -I http://127.0.0.1:8501` -> HTTP 200 확인
 - 다음 작업: 10번 문서/타임라인 정리에서 README와 docs의 실행 방법, env/secrets, 테스트 marker, fallback 정책을 최종 형태로 더 다듬거나, domain 스텁을 실제 계약/fixture 중심으로 정리한다.
+
+### 2026-05-17 10번 문서/타임라인 정리 완료
+- 작업: 1~9번 구현 결과와 문서 기준을 맞췄다. `AGENTS.md`의 오래된 상태 설명을 현재 app/Monitoring/Simulation/Prediction, ScenarioService, 공통 overlay, 테스트 marker 기준으로 갱신했다. `docs/map_feasibility_2026-04-09.md`는 제품 기본 지도 경로가 WebGL/3D가 아니라 Folium/Leaflet 기반 VWorld 2.5D임을 명시하고, 고도 미조회 계약과 향후 metadata 확장 슬롯을 정리했다. `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`에는 app/Monitoring/Simulation/Prediction/Scenario/검증 실행 흐름을 코드 호출 순서로 보강했다. `README.md`에는 의존성 설치, env/secrets, `data/private/scenarios.json`, VWorld key fallback 정책을 추가했다.
+- 작업 전 기준선:
+  - `git status --short` 기준 대량 modified 파일이 이미 존재한다. 이번 작업은 문서 파일만 수정했고, 기존 unrelated dirty 파일은 되돌리지 않았다.
+  - 회의안/개발 흐름도 기준 5~7단계 요구인 시나리오 연결, 지도 fallback, 발표 데모 안정화 기준을 문서에 반영했다.
+- 수정 파일: `AGENTS.md`, `README.md`, `docs/map_feasibility_2026-04-09.md`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - README만 보고 `.venv` 의존성 설치, Streamlit 8501 실행, HTTP 확인, compileall, 빠른 pytest, 전체 pytest, integration/slow 테스트를 실행할 수 있다.
+  - AGENTS의 현재 상태 설명은 ScenarioService/UI, MapOverlayService/renderer, DC Power Flow/A*/Prediction fallback 구현 상태와 충돌하지 않는다.
+  - 지도 feasibility 문서는 `get_map_capability(prefer_webgl=False)`, `wmts_tile_url`, `map_2_5d`, `elevation_source="not_queried"` 계약을 현재 구현 기준으로 설명한다.
+- 검증:
+  - `git diff --check -- README.md AGENTS.md WORK_TIMELINE.md docs/map_feasibility_2026-04-09.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 85개 통과, 14개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 98개 통과, 1개 skipped
+  - `curl -I http://127.0.0.1:8501` -> HTTP 200 확인 후 검증용 Streamlit 서버 종료
+- 다음 작업: domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하거나, ScenarioService 저장 대상을 설치 지점/페이지 입력값까지 확장할지 후속 계약을 정한다.

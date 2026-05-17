@@ -338,6 +338,14 @@ app.py
 - `tests/test_streamlit_import_safe.py`는 `app.py`, Monitoring, Simulation, Prediction 페이지를 별도 Python subprocess에서 bare-run해 import-safe 상태를 고정한다.
 - Streamlit bare-run의 `missing ScriptRunContext` warning은 정상 warning으로 보고, subprocess return code와 success marker 출력으로 실패 여부를 판단한다.
 
+## 2026-05-17 문서 기준 실행 흐름
+- app landing: `app.py` -> `render_scenario_sidebar()` -> `get_map_capability(prefer_webgl=False)` -> `MapOverlayService.build_landing_overlay()` -> `render_map_overlay(..., return_map_data=True)` -> `InstallationPoint` 저장.
+- Monitoring: `pages/01_monitoring.py` -> `MonitoringService.run_dc_power_flow()` -> `MapOverlayService.build_monitoring_overlay()` -> `render_map_overlay(selected_line_id=...)`.
+- Simulation: `pages/02_simulation.py` -> `SimulationService.run_simulation()` -> `MonitoringService.run_dc_power_flow()` baseline -> `MapOverlayService.build_simulation_overlay()` -> `render_map_overlay()`.
+- Prediction: `pages/03_prediction.py` -> `PredictionService.run_*_prediction()` -> `MapOverlayService.build_prediction_overlay()` -> `render_map_overlay(selected_line_id=...)`.
+- Scenario: 공통 sidebar의 `render_scenario_sidebar()` -> `ScenarioService` -> `data/private/scenarios.json` 저장소 -> app/Monitoring/Simulation/Prediction 공통 `sgop_shared_scenario`.
+- 검증: `README.md`의 compileall, 빠른 pytest, 전체 pytest, integration/slow marker, Streamlit 8501 HTTP 확인 명령을 기준으로 한다.
+
 ## 현재 남은 구조적 갭
 - `app.py`, Monitoring, Simulation, Prediction은 모두 공통 overlay 렌더러를 사용하지만, 실제 지도 클릭과 브라우저 렌더링은 Streamlit 런타임에서 추가 수동 검증이 필요하다.
 - `MapOverlayService`는 app/Monitoring/Simulation/Prediction overlay 계약을 만들지만, 실제 VWorld 호출 품질과 고도 조회는 아직 붙어 있지 않다.

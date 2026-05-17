@@ -8,6 +8,12 @@
 ## 실행 환경
 
 - Python: `.venv/bin/python` 기준, 현재 검증 버전은 Python 3.10.12다.
+- 의존성 설치:
+
+```bash
+.venv/bin/python -m pip install -r requirements.txt
+```
+
 - Streamlit 앱 실행:
 
 ```bash
@@ -64,6 +70,20 @@ SGOP_RUN_SLOW_LSTM=1 PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m p
 `slow` marker는 TensorFlow/LSTM 모델 로드 또는 재학습처럼 기본 제품 흐름보다 오래 걸릴 수 있는 테스트에 사용한다.
 
 Streamlit 페이지 import-safe 검증은 `tests/test_streamlit_import_safe.py`에서 bare-run으로 수행한다. 이때 `missing ScriptRunContext` warning은 Streamlit bare mode 특성이므로 return code가 0이면 통과로 본다.
+
+## 환경 변수와 secrets
+
+- `.env`: 로컬 개발용 환경 변수 파일이다. 저장소에 운영 키를 커밋하지 않는다.
+- `secrets/`: 배포 또는 로컬 비밀정보 템플릿을 두는 위치다.
+- `data/private/`: 사용자별 시나리오 저장소 같은 private runtime 데이터를 둔다.
+- Streamlit Cloud 배포 시 비밀정보는 Streamlit secrets 기준으로 관리한다.
+- VWorld 키는 `VWORLD_API_KEY`로 읽는다. 키가 없어도 앱은 `map_2_5d` 또는 표 fallback으로 계속 동작해야 한다.
+
+현재 시나리오 저장 기본 위치:
+
+```text
+data/private/scenarios.json
+```
 
 ## Fallback 정책
 
