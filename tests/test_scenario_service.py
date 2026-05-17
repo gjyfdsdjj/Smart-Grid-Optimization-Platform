@@ -5,7 +5,12 @@ import json
 
 import pytest
 
-from src.data.schemas import ScenarioContext
+from src.data.schemas import (
+    InstallationPoint,
+    SavedScenarioState,
+    ScenarioContext,
+    ScenarioPageState,
+)
 from src.services.monitoring_service import MonitoringService
 from src.services.prediction_service import PredictionService
 from src.services.scenario_service import ScenarioService
@@ -62,6 +67,102 @@ def test_save_scenario_updates_same_id_without_duplicate(tmp_path):
     assert scenarios[0].scenario_id == "same-id"
     assert scenarios[0].title == "After"
     assert scenarios[0].created_at == datetime(2026, 5, 11, 20, 0)
+
+
+def test_save_and_load_scenario_state_round_trips_page_inputs(tmp_path):
+    service = _service(tmp_path)
+    installation = InstallationPoint(
+        installation_id="tower-001",
+        label="신규 송전탑 1",
+        kind="transmission_tower",
+        latitude=36.45,
+        longitude=127.85,
+        mode="new",
+        voltage_kv=345.0,
+        notes="현장 검토",
+        created_at=datetime(2026, 5, 17, 12, 0),
+    )
+    saved_state = SavedScenarioState(
+        scenario=ScenarioContext(
+            scenario_id="full-state",
+            title="Full State",
+            created_at=datetime(2026, 5, 17, 12, 0),
+        ),
+        page_state=ScenarioPageState(
+            landing_installations=[installation],
+            monitoring_load_scale=1.25,
+            monitoring_data_source="DC Power Flow",
+            simulation_start_bus_id="BUS_001",
+            simulation_end_bus_id="BUS_011",
+            simulation_candidate_site_ids=["CANDIDATE_A", "CANDIDATE_B"],
+            simulation_load_scale=1.15,
+            prediction_load_scale=1.1,
+            prediction_model_source="Baseline",
+            prediction_selected_bus_ids=["BUS_001", "BUS_011"],
+            prediction_retrain=False,
+            prediction_epochs=20,
+        ),
+    )
+
+    service.save_scenario_state(saved_state)
+    loaded = service.load_scenario_state("full-state")
+
+    assert loaded.scenario.scenario_id == "full-state"
+    assert loaded.page_state.monitoring_load_scale == 1.25
+    assert loaded.page_state.simulation_candidate_site_ids == ["CANDIDATE_A", "CANDIDATE_B"]
+    assert loaded.page_state.prediction_model_source == "Baseline"
+    assert loaded.page_state.prediction_selected_bus_ids == ["BUS_001", "BUS_011"]
+    assert len(loaded.page_state.landing_installations) == 1
+    assert loaded.page_state.landing_installations[0].installation_id == "tower-001"
+    assert loaded.page_state.landing_installations[0].elevation_source == "not_queried"
+
+
+def test_load_scenario_state_keeps_legacy_context_only_records_compatible(tmp_path):
+    storage_path = tmp_path / "scenarios.json"
+    storage_path.write_text(
+        json.dumps(
+            {
+                "scenarios": [
+                    {
+                        "scenario_id": "legacy",
+                        "title": "Legacy",
+                        "description": "ScenarioContext only",
+                        "region": "South Korea",
+                        "created_at": "2026-05-17T12:00:00",
+                        "created_by": "pytest",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = ScenarioService(storage_path=storage_path)
+
+    loaded = service.load_scenario_state("legacy")
+
+    assert loaded.scenario.scenario_id == "legacy"
+    assert loaded.scenario.title == "Legacy"
+    assert loaded.page_state == ScenarioPageState()
+
+
+def test_legacy_save_scenario_preserves_existing_page_state(tmp_path):
+    service = _service(tmp_path)
+    service.save_scenario_state(
+        SavedScenarioState(
+            scenario=ScenarioContext(scenario_id="preserve", title="Before"),
+            page_state=ScenarioPageState(
+                simulation_candidate_site_ids=["CANDIDATE_A"],
+                prediction_model_source="GNN",
+            ),
+        )
+    )
+
+    service.save_scenario(ScenarioContext(scenario_id="preserve", title="After"))
+    loaded = service.load_scenario_state("preserve")
+
+    assert loaded.scenario.title == "After"
+    assert loaded.page_state.simulation_candidate_site_ids == ["CANDIDATE_A"]
+    assert loaded.page_state.prediction_model_source == "GNN"
 
 
 def test_list_scenarios_is_empty_when_storage_file_is_missing(tmp_path):

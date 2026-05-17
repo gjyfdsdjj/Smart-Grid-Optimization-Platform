@@ -12,6 +12,14 @@ from src.data.schemas import PredictionResult, ScenarioContext
 from src.services.map_overlay_service import MapOverlayService
 from src.services.prediction_service import PredictionService
 from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay
+from src.ui.scenario_controls import (
+    PAGE_STATE_RESTORE_PENDING_KEY,
+    PREDICTION_EPOCHS_KEY,
+    PREDICTION_LOAD_SCALE_KEY,
+    PREDICTION_MODEL_SOURCE_KEY,
+    PREDICTION_RETRAIN_KEY,
+    PREDICTION_SELECTED_BUS_IDS_KEY,
+)
 from src.ui.scenario_controls import render_scenario_sidebar
 from src.ui.table_selection import selected_value_from_dataframe_event
 
@@ -31,6 +39,8 @@ _ALL_BUSES = [
     ("BUS_013", "부산"),
 ]
 _DEFAULT_BUSES = ["BUS_001", "BUS_007", "BUS_011", "BUS_013"]
+_MODEL_OPTIONS = ["Mock", "Baseline", "LSTM", "GNN", "LSTM+GNN"]
+_SELECTED_BUS_NAMES_KEY = "prediction_selected_bus_names"
 
 _RISK_COLOR = {
     "critical": "#e74c3c",
@@ -139,6 +149,46 @@ _RAW_DIR = str(
 )
 
 shared_scenario = render_scenario_sidebar()
+bus_id_to_name = {bid: name for bid, name in _ALL_BUSES}
+bus_name_to_id = {name: bid for bid, name in _ALL_BUSES}
+default_names = [name for bid, name in _ALL_BUSES if bid in _DEFAULT_BUSES]
+
+if st.session_state.get(PREDICTION_MODEL_SOURCE_KEY) not in _MODEL_OPTIONS:
+    st.session_state[PREDICTION_MODEL_SOURCE_KEY] = "Mock"
+if PREDICTION_LOAD_SCALE_KEY not in st.session_state:
+    st.session_state[PREDICTION_LOAD_SCALE_KEY] = 1.0
+else:
+    try:
+        st.session_state[PREDICTION_LOAD_SCALE_KEY] = max(
+            0.8,
+            min(float(st.session_state[PREDICTION_LOAD_SCALE_KEY]), 1.3),
+        )
+    except (TypeError, ValueError):
+        st.session_state[PREDICTION_LOAD_SCALE_KEY] = 1.0
+if PREDICTION_RETRAIN_KEY not in st.session_state:
+    st.session_state[PREDICTION_RETRAIN_KEY] = False
+if PREDICTION_EPOCHS_KEY not in st.session_state:
+    st.session_state[PREDICTION_EPOCHS_KEY] = 20
+else:
+    try:
+        st.session_state[PREDICTION_EPOCHS_KEY] = max(
+            5,
+            min(int(st.session_state[PREDICTION_EPOCHS_KEY]), 50),
+        )
+    except (TypeError, ValueError):
+        st.session_state[PREDICTION_EPOCHS_KEY] = 20
+
+restore_pending = bool(st.session_state.pop(PAGE_STATE_RESTORE_PENDING_KEY, False))
+stored_bus_ids = st.session_state.get(PREDICTION_SELECTED_BUS_IDS_KEY)
+if restore_pending and isinstance(stored_bus_ids, list):
+    restored_names = [
+        bus_id_to_name[bus_id]
+        for bus_id in stored_bus_ids
+        if bus_id in bus_id_to_name
+    ]
+    st.session_state[_SELECTED_BUS_NAMES_KEY] = restored_names or list(default_names)
+elif _SELECTED_BUS_NAMES_KEY not in st.session_state:
+    st.session_state[_SELECTED_BUS_NAMES_KEY] = list(default_names)
 
 # ── 사이드바 ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -146,8 +196,7 @@ with st.sidebar:
 
     model_source = st.radio(
         "예측 모델",
-        options=["Mock", "Baseline", "LSTM", "GNN", "LSTM+GNN"],
-        index=0,
+        options=_MODEL_OPTIONS,
         help=(
             "Mock: 합성 패턴 (즉시)\n"
             "Baseline: KPX 실데이터 시간대 평균 (빠름)\n"
@@ -155,15 +204,20 @@ with st.sidebar:
             "GNN: 인접 노드 그래프 기반 예측\n"
             "LSTM+GNN: 두 모델 병렬 조합, 실패 시 baseline 전환"
         ),
+        key=PREDICTION_MODEL_SOURCE_KEY,
     )
 
     if model_source in {"LSTM", "LSTM+GNN"}:
         retrain = st.checkbox(
             "모델 재학습 (slow)",
-            value=False,
             help="체크 시 저장된 모델을 무시하고 재학습합니다. 기본 제품 흐름에서는 꺼두는 것을 권장합니다.",
+            key=PREDICTION_RETRAIN_KEY,
         )
-        epochs = st.slider("에포크", 5, 50, 20, step=5) if retrain else 20
+        epochs = (
+            st.slider("에포크", 5, 50, step=5, key=PREDICTION_EPOCHS_KEY)
+            if retrain
+            else 20
+        )
     else:
         retrain, epochs = False, 20
 
@@ -171,18 +225,18 @@ with st.sidebar:
 
     load_scale = st.slider(
         "부하 배율",
-        min_value=0.80, max_value=1.30, value=1.00, step=0.05,
+        min_value=0.80, max_value=1.30, step=0.05,
         help="1.0 = 기본 부하. 1.2 = 20% 증가 시나리오.",
+        key=PREDICTION_LOAD_SCALE_KEY,
     )
 
-    bus_options = {name: bid for bid, name in _ALL_BUSES}
-    default_names = [name for bid, name in _ALL_BUSES if bid in _DEFAULT_BUSES]
     selected_names = st.multiselect(
         "그래프에 표시할 노드",
-        options=list(bus_options.keys()),
-        default=default_names,
+        options=list(bus_name_to_id.keys()),
+        key=_SELECTED_BUS_NAMES_KEY,
     )
-    selected_bus_ids = [bus_options[n] for n in selected_names]
+    selected_bus_ids = [bus_name_to_id[n] for n in selected_names]
+    st.session_state[PREDICTION_SELECTED_BUS_IDS_KEY] = selected_bus_ids
 
     st.divider()
     run_btn = st.button("예측 실행", type="primary", width="stretch")
@@ -354,8 +408,6 @@ pred_df = pd.DataFrame([
     }
     for p in result.predictions
 ])
-
-bus_id_to_name = {bid: name for bid, name in _ALL_BUSES}
 
 if not selected_bus_ids:
     st.warning("사이드바에서 노드를 1개 이상 선택하세요.")

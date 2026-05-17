@@ -185,6 +185,48 @@ def test_simulation_overlay_exposes_candidate_points_and_ranked_routes():
     assert any(point.metadata["candidate_id"] == "SITE_SOUTH" for point in candidate_points)
 
 
+def test_simulation_overlay_exposes_landing_installation_candidate_metadata():
+    scenario = _scenario()
+    service = SimulationService()
+    installation = InstallationPoint(
+        installation_id="tower-manual-001",
+        label="수동 송전탑 후보",
+        kind="transmission_tower",
+        latitude=36.42,
+        longitude=127.72,
+        voltage_kv=345.0,
+        created_at=scenario.created_at,
+    )
+    simulation = service.run_simulation(
+        service.build_default_input(
+            scenario=scenario,
+            created_at=scenario.created_at,
+            candidate_site_ids=[],
+            user_candidate_points=[installation],
+            load_scale=1.0,
+        ),
+        created_at=scenario.created_at,
+    )
+
+    overlay = MapOverlayService().build_simulation_overlay(
+        simulation,
+        map_capability=_map_2_5d_capability(),
+    )
+
+    candidate_point = next(point for point in overlay.points if point.kind == "tower_candidate")
+    route = overlay.routes[0]
+
+    assert candidate_point.source == "manual"
+    assert candidate_point.metadata["candidate_id"] == "user:tower-manual-001"
+    assert candidate_point.metadata["installation_id"] == "tower-manual-001"
+    assert candidate_point.metadata["candidate_source"] == "landing_installation"
+    assert candidate_point.latitude == installation.latitude
+    assert candidate_point.longitude == installation.longitude
+    assert route.candidate_id == "user:tower-manual-001"
+    assert route.metadata["candidate_source"] == "landing_installation"
+    assert route.metadata["installation_id"] == "tower-manual-001"
+
+
 def test_prediction_overlay_uses_risk_line_ids_for_table_map_sync():
     scenario = _scenario()
     prediction = PredictionService().run_mock_prediction(

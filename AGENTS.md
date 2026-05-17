@@ -37,10 +37,10 @@
 - `app.py`는 공통 sidebar 시나리오 관리와 대한민국 중심 2.5D 운영 지도를 제공한다.
 - 지도 클릭 좌표는 화면에 x/y만 표시하고, 내부 계약에는 `elevation_m=None`, `elevation_source="not_queried"`, `coordinate_system="EPSG:4326"`를 남긴다.
 - `pages/01_monitoring.py`는 `MonitoringService.run_dc_power_flow()`를 기본 제품 경로로 사용하고, 실패 시 `mock_data` fallback으로 내려간다.
-- `pages/02_simulation.py`는 `SimulationService.run_simulation()` 결과를 핵심 입력으로 사용하고, A*/score/counterfactual delta 실패 시 `mock_data` fallback을 유지한다.
+- `pages/02_simulation.py`는 `SimulationService.run_simulation()` 결과를 핵심 입력으로 사용하고, app 랜딩에서 추가한 송전탑 설치 지점을 `user:<installation_id>` 후보지로 함께 소비한다. A*/score/counterfactual delta 실패 시 `mock_data` fallback을 유지한다.
 - `pages/03_prediction.py`는 Mock/Baseline/LSTM/GNN/LSTM+GNN 경로를 제공하며, 고급 예측 경로 실패 시 baseline 또는 mock fallback으로 전환한다.
 - `src/services/map_overlay_service.py`와 `src/ui/map_overlay_renderer.py`가 app/Monitoring/Simulation/Prediction의 공통 지도 overlay 계약과 렌더링을 담당한다.
-- `src/services/scenario_service.py`와 `src/ui/scenario_controls.py`가 `data/private/scenarios.json` 기반 시나리오 저장/불러오기/삭제 UI를 담당한다.
+- `src/services/scenario_service.py`와 `src/ui/scenario_controls.py`가 `data/private/scenarios.json` 기반 시나리오 저장/불러오기/삭제 UI를 담당한다. 저장 대상은 `ScenarioContext`와 랜딩 설치 지점, Monitoring/Simulation/Prediction 주요 입력값을 묶은 `SavedScenarioState`다.
 - `Monitoring`, `Simulation`, `Prediction` 페이지는 Streamlit session state의 공통 `ScenarioContext`를 공유한다.
 - `src/data/schemas.py`가 페이지/서비스 간 공통 계약의 기준 파일이다.
 - `src/domain`, `src/utils`, `src/engine/explain`, `src/engine/optimize`, `src/engine/recommend`에는 아직 스텁 또는 후속 확장 영역이 남아 있다.
@@ -61,6 +61,7 @@
 - `Tower`: 신규 송전탑 후보 지점. 설치 후보와 경로 탐색의 기준 개체다. [tower.py](/mnt/c/Users/smp05/Desktop/SGOP/src/domain/tower.py)
 - `Scenario`: Monitoring, Simulation, Prediction을 묶는 공통 맥락이다. [scenario.py](/mnt/c/Users/smp05/Desktop/SGOP/src/domain/scenario.py)
 - `ScenarioContext`: 현재 공통 스키마에서 시나리오 식별을 담당하는 핵심 메타데이터다. [schemas.py](/mnt/c/Users/smp05/Desktop/SGOP/src/data/schemas.py)
+- `ScenarioPageState`, `SavedScenarioState`: 시나리오 저장 시 랜딩 설치 지점과 페이지 입력값을 함께 보존하는 저장 계약이다.
 - `RiskLine`: 선로 위험도 표현의 기준 타입이다.
 - `RouteResult`: A* 또는 휴리스틱 탐색 결과의 공통 형식이다.
 - `ScoreBreakdown`: 추천 점수의 구성 요소를 담는 타입이다.
@@ -71,7 +72,7 @@
 - `MonitoringService`: 현재 상태, KPI, 혼잡도, 선로 상태, 차트 입력을 만든다.
 - `SimulationService`: 후보지 입력, 경로 결과, 추천 결과, 설치 전후 비교를 만든다.
 - `PredictionService`: baseline, `LSTM`, `GNN` 예측 흐름을 조율하고 부하 예측, 위험 선로, 설명 출력을 만든다.
-- `ScenarioService`: `ScenarioContext` 저장/불러오기/삭제를 맡고, UI 연결은 `src/ui/scenario_controls.py`가 담당한다.
+- `ScenarioService`: `ScenarioContext`와 `ScenarioPageState` 저장/불러오기/삭제를 맡고, UI 연결은 `src/ui/scenario_controls.py`가 담당한다.
 - `OptimizationService`: ESS/운영 최적화 확장용이다. MVP 필수 범위는 아니다.
 
 ## 엔진 책임 구조
@@ -201,14 +202,14 @@
 - `pages/03_prediction.py`는 Streamlit session state의 공통 `ScenarioContext`를 읽고 다시 저장하도록 수정했다.
 - 서비스 인터페이스 미세정리로 `MonitoringService.run_mock_monitoring()`을 public 진입점으로 추가하고, `created_at`를 공통 시간 인자로 맞췄다.
 - fallback 규칙 초안을 `AGENTS.md`에 문서화하고, 세 서비스의 첫 warning 문구를 `mock_data fallback` 형식으로 통일했다.
-- 2026-05-17 기준으로 `InstallationPoint`, VWorld WMTS 2.5D tile 계약, app 랜딩 지도, Monitoring/Simulation/Prediction overlay, ScenarioService UI, 테스트 marker 체계가 추가되었다.
+- 2026-05-17 기준으로 `InstallationPoint`, VWorld WMTS 2.5D tile 계약, app 랜딩 지도, Monitoring/Simulation/Prediction overlay, `SavedScenarioState` 기반 ScenarioService UI, 테스트 marker 체계가 추가되었다.
 - app/Monitoring/Simulation/Prediction은 모두 공통 `MapOverlayResult`와 `render_map_overlay()` 렌더러를 사용한다.
 - 빠른 테스트는 `pytest -m "not integration and not slow"`로 실행하고, raw data 기반 테스트는 `integration`, LSTM 로드/재학습 테스트는 `slow` marker로 분리한다.
 
 ## 앞으로 작업할 때 우선순위
 1. domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하되 `src/data/schemas.py`와 책임이 겹치지 않게 한다.
-2. `ScenarioService` 저장 대상이 현재 `ScenarioContext`에 머무르므로 설치 지점과 페이지 입력값까지 저장할지 후속 계약을 정한다.
-3. 실제 VWorld 고도 조회를 붙이기 전 `elevation_source`, 조회 시각, fallback 여부 metadata를 확장한다.
+2. 실제 VWorld 고도 조회를 붙이기 전 `elevation_source`, 조회 시각, fallback 여부 metadata를 확장한다.
+3. Scenario 저장 상태에 계산 결과를 포함할지 여부는 별도 계약으로 다룬다. 현재는 입력값만 저장하고 결과 캐시는 불러오기 시 비운다.
 
 ## 작업 타임라인 규칙
 - 작업 타임라인 기준 파일은 루트의 `WORK_TIMELINE.md`다.

@@ -217,6 +217,41 @@ class InstallationPoint:
     metadata: dict[str, object] = field(default_factory=dict)
 
 
+# ── 시나리오 저장 상태 ────────────────────────────────────────────────────────
+
+@dataclass
+class ScenarioPageState:
+    """시나리오와 함께 저장할 페이지 입력 상태.
+
+    계산 결과 자체는 저장하지 않는다. 저장 대상은 사용자가 다시 같은 조건으로
+    Monitoring, Simulation, Prediction을 실행할 수 있게 하는 입력값과 랜딩 지도
+    설치 지점 목록이다.
+    """
+
+    landing_installations: list[InstallationPoint] = field(default_factory=list)
+    monitoring_load_scale: float = 1.0
+    monitoring_data_source: str = "DC Power Flow"
+    simulation_start_bus_id: str = "BUS_001"
+    simulation_end_bus_id: str = "BUS_011"
+    simulation_candidate_site_ids: list[str] = field(default_factory=list)
+    simulation_load_scale: float = 1.0
+    prediction_load_scale: float = 1.0
+    prediction_model_source: str = "Mock"
+    prediction_selected_bus_ids: list[str] = field(default_factory=list)
+    prediction_retrain: bool = False
+    prediction_epochs: int = 20
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class SavedScenarioState:
+    """ScenarioService가 저장소에 기록하는 전체 시나리오 상태."""
+
+    scenario: ScenarioContext
+    page_state: ScenarioPageState = field(default_factory=ScenarioPageState)
+    schema_version: int = 1
+
+
 # ── 모니터링 ──────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -371,6 +406,7 @@ class SimulationInput:
     start_bus_id: str = ""
     end_bus_id: str = ""
     candidate_site_ids: list[str] = field(default_factory=list)
+    user_candidate_points: list[InstallationPoint] = field(default_factory=list)
     load_scale: float = 1.0
     notes: str = ""
 

@@ -3,10 +3,22 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from src.data.schemas import ScenarioContext
+from src.data.schemas import InstallationPoint, ScenarioContext, ScenarioPageState
 from src.ui.scenario_controls import (
+    LANDING_INSTALLATIONS_KEY,
+    MONITORING_DATA_SOURCE_KEY,
+    MONITORING_LOAD_SCALE_KEY,
+    PREDICTION_LOAD_SCALE_KEY,
+    PREDICTION_MODEL_SOURCE_KEY,
+    PREDICTION_SELECTED_BUS_IDS_KEY,
+    SIMULATION_CANDIDATES_KEY,
+    SIMULATION_END_BUS_KEY,
+    SIMULATION_LOAD_SCALE_KEY,
+    SIMULATION_START_BUS_KEY,
+    apply_saved_page_state,
     build_default_scenario,
     build_scenario_from_form,
+    collect_current_page_state,
     scenario_exists,
     scenario_option_label,
     scenario_result_state_keys,
@@ -104,6 +116,75 @@ def test_scenario_result_state_keys_cover_core_page_caches():
     assert "pred_result" in keys
     assert "pred_map_overlay" in keys
     assert "pred_scenario_a" in keys
+    assert "selected_candidates" not in keys
+    assert "pred_source" not in keys
+
+
+def test_collect_current_page_state_reads_core_input_keys():
+    installation = InstallationPoint(
+        installation_id="plant-001",
+        label="신규 발전소",
+        kind="power_plant",
+        latitude=36.0,
+        longitude=127.0,
+        capacity_mw=500.0,
+        created_at=datetime(2026, 5, 17, 12, 0),
+    )
+    state = {
+        LANDING_INSTALLATIONS_KEY: [installation],
+        MONITORING_LOAD_SCALE_KEY: 1.2,
+        MONITORING_DATA_SOURCE_KEY: "DC Power Flow",
+        SIMULATION_START_BUS_KEY: "BUS_001",
+        SIMULATION_END_BUS_KEY: "BUS_011",
+        SIMULATION_CANDIDATES_KEY: ["CANDIDATE_A"],
+        SIMULATION_LOAD_SCALE_KEY: 1.15,
+        PREDICTION_LOAD_SCALE_KEY: 1.1,
+        PREDICTION_MODEL_SOURCE_KEY: "Baseline",
+        PREDICTION_SELECTED_BUS_IDS_KEY: ["BUS_001", "BUS_013"],
+    }
+
+    page_state = collect_current_page_state(state)
+
+    assert page_state.landing_installations == [installation]
+    assert page_state.monitoring_load_scale == 1.2
+    assert page_state.simulation_candidate_site_ids == ["CANDIDATE_A"]
+    assert page_state.prediction_model_source == "Baseline"
+    assert page_state.prediction_selected_bus_ids == ["BUS_001", "BUS_013"]
+
+
+def test_apply_saved_page_state_restores_inputs_and_clears_results():
+    state = {
+        "sgop_monitoring_result": object(),
+        "sim_result": object(),
+        "pred_result": object(),
+        "sim_run": True,
+    }
+    page_state = ScenarioPageState(
+        monitoring_load_scale=1.3,
+        monitoring_data_source="mock",
+        simulation_start_bus_id="BUS_002",
+        simulation_end_bus_id="BUS_012",
+        simulation_candidate_site_ids=["CANDIDATE_B"],
+        simulation_load_scale=1.2,
+        prediction_load_scale=1.15,
+        prediction_model_source="GNN",
+        prediction_selected_bus_ids=["BUS_002"],
+    )
+
+    apply_saved_page_state(page_state, state=state)
+
+    assert state[MONITORING_LOAD_SCALE_KEY] == 1.3
+    assert state[MONITORING_DATA_SOURCE_KEY] == "mock"
+    assert state[SIMULATION_START_BUS_KEY] == "BUS_002"
+    assert state[SIMULATION_END_BUS_KEY] == "BUS_012"
+    assert state[SIMULATION_CANDIDATES_KEY] == ["CANDIDATE_B"]
+    assert state["selected_candidates"] == ["CANDIDATE_B"]
+    assert state[PREDICTION_MODEL_SOURCE_KEY] == "GNN"
+    assert state[PREDICTION_SELECTED_BUS_IDS_KEY] == ["BUS_002"]
+    assert "sgop_monitoring_result" not in state
+    assert "sim_result" not in state
+    assert "pred_result" not in state
+    assert state["sim_run"] is False
 
 
 def test_core_pages_use_common_scenario_sidebar():

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
+
+from src.data.schemas import InstallationPoint
 from src.data.schemas import RouteResult, ScoreBreakdown
 from src.engine.search.score_function import (
     CandidateImpactInput,
@@ -195,6 +198,40 @@ def test_empty_candidate_selection_uses_service_warning_once():
     ]
     assert sum("후보지가 비어" in warning for warning in result.warnings) == 1
     assert result.recommendations
+
+
+def test_user_installation_candidate_generates_recommendation_and_route():
+    service = SimulationService()
+    installation = InstallationPoint(
+        installation_id="tower-manual-001",
+        label="수동 송전탑 후보",
+        kind="transmission_tower",
+        latitude=36.42,
+        longitude=127.72,
+        voltage_kv=345.0,
+        created_at=datetime(2026, 5, 17, 22, 0),
+    )
+    simulation_input = service.build_default_input(
+        candidate_site_ids=[],
+        user_candidate_points=[installation],
+        load_scale=1.0,
+    )
+
+    result = service.run_simulation(simulation_input)
+    recommendation = result.recommendations[0]
+
+    assert result.simulation_input.candidate_site_ids == []
+    assert result.simulation_input.user_candidate_points == [installation]
+    assert [item.candidate_id for item in result.recommendations] == ["user:tower-manual-001"]
+    assert recommendation.candidate_label == "사용자 추가 송전탑: 수동 송전탑 후보"
+    assert recommendation.route is not None
+    assert "user:tower-manual-001" in recommendation.route.path_node_ids
+    assert any(
+        point.point_id == "user:tower-manual-001"
+        and point.latitude == installation.latitude
+        and point.longitude == installation.longitude
+        for point in recommendation.route.waypoints
+    )
 
 
 def test_simulation_loss_delta_unit_is_mw_for_mock_and_actual():

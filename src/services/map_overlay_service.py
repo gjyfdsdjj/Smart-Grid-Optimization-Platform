@@ -351,13 +351,21 @@ class MapOverlayService:
             return None
 
         score = recommendation.score
+        is_user_candidate = recommendation.candidate_id.startswith("user:")
+        installation_id = (
+            recommendation.candidate_id.removeprefix("user:")
+            if is_user_candidate
+            else None
+        )
         return _point_from_coordinate(
             coordinate,
             kind="tower_candidate",
             status="selected" if recommendation.rank == 1 else "normal",
-            source=source,
+            source="manual" if is_user_candidate else source,
             metadata={
                 "candidate_id": recommendation.candidate_id,
+                "installation_id": installation_id,
+                "candidate_source": "landing_installation" if is_user_candidate else "service_candidate",
                 "rank": recommendation.rank,
                 "score_total": score.total_score if score is not None else None,
                 "congestion_relief": score.congestion_relief if score is not None else None,
@@ -432,6 +440,12 @@ def _route_overlay_from_recommendation(
         for point in route.waypoints
     ]
     score = recommendation.score
+    is_user_candidate = recommendation.candidate_id.startswith("user:")
+    installation_id = (
+        recommendation.candidate_id.removeprefix("user:")
+        if is_user_candidate
+        else None
+    )
     return MapOverlayRoute(
         overlay_id=f"simulation-route:{route.route_id}",
         label=f"{recommendation.rank}순위 {recommendation.candidate_label}",
@@ -444,6 +458,8 @@ def _route_overlay_from_recommendation(
         source=source,
         metadata={
             "candidate_id": recommendation.candidate_id,
+            "installation_id": installation_id,
+            "candidate_source": "landing_installation" if is_user_candidate else "service_candidate",
             "candidate_label": recommendation.candidate_label,
             "path_node_ids": list(route.path_node_ids),
             "score_total": score.total_score if score is not None else None,

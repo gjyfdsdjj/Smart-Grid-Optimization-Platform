@@ -85,6 +85,12 @@ Streamlit 페이지 import-safe 검증은 `tests/test_streamlit_import_safe.py`�
 data/private/scenarios.json
 ```
 
+저장 파일에는 `ScenarioContext`와 `ScenarioPageState`가 함께 들어간다.
+현재 저장 범위는 랜딩 지도 설치 지점, Monitoring 부하 배율/데이터 소스, Simulation 시작/종료 버스·후보지·부하 배율, Prediction 모델·부하 배율·선택 노드다.
+계산 결과와 지도 overlay 캐시는 저장하지 않으며, 저장된 시나리오를 불러오면 이전 결과 캐시는 비운 뒤 입력값만 복원한다.
+기존 `ScenarioContext`만 들어 있던 JSON은 계속 읽을 수 있다.
+랜딩에서 추가한 송전탑 설치 지점은 Simulation 후보 목록에 `사용자 추가 송전탑`으로 표시되고, 선택하면 `user:<installation_id>` 후보로 route/score/overlay 계산에 포함된다.
+
 ## Fallback 정책
 
 - 외부 API 또는 실제 데이터가 없어도 mock 기준으로 앱이 중단되지 않아야 한다.

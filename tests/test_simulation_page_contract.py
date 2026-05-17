@@ -37,3 +37,12 @@ def test_common_renderer_supports_candidate_point_fallback_tables():
 
     assert "show_point_table" in signature.parameters
     assert signature.parameters["show_point_table"].default is False
+
+
+def test_simulation_page_reads_landing_installations_as_user_candidates():
+    source = _SIMULATION_PAGE.read_text(encoding="utf-8")
+
+    assert "LANDING_INSTALLATIONS_KEY" in source
+    assert "transmission_tower" in source
+    assert "user:" in source
+    assert "user_candidate_points=user_candidate_points" in source

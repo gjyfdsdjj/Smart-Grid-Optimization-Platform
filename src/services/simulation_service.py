@@ -18,6 +18,7 @@ from src.engine.powerflow.congestion_metrics import (
 )
 from src.data.schemas import (
     FallbackInfo,
+    InstallationPoint,
     MonitoringResult,
     RecommendationResult,
     ResultSource,
@@ -121,6 +122,7 @@ class SimulationService:
         start_bus_id: str = "BUS_001",
         end_bus_id: str = "BUS_011",
         candidate_site_ids: list[str] | None = None,
+        user_candidate_points: list[InstallationPoint] | None = None,
         load_scale: float = 1.0,
         notes: str = "",
     ) -> SimulationInput:
@@ -137,6 +139,7 @@ class SimulationService:
             start_bus_id=start_bus_id,
             end_bus_id=end_bus_id,
             candidate_site_ids=resolved_candidate_site_ids,
+            user_candidate_points=list(user_candidate_points or []),
             load_scale=load_scale,
             notes=notes,
         )
@@ -263,15 +266,24 @@ class SimulationService:
 
         start_bus_id = simulation_input.start_bus_id or "BUS_001"
         end_bus_id = simulation_input.end_bus_id or "BUS_011"
-        candidate_site_ids = simulation_input.candidate_site_ids or list(_DEFAULT_CANDIDATES)
+        user_candidate_points = [
+            point
+            for point in simulation_input.user_candidate_points
+            if isinstance(point, InstallationPoint)
+        ]
+        candidate_site_ids = list(simulation_input.candidate_site_ids)
+        if not candidate_site_ids and not user_candidate_points:
+            candidate_site_ids = list(_DEFAULT_CANDIDATES)
         scenario = simulation_input.scenario
 
         if not simulation_input.start_bus_id:
             warnings.append("시작 버스가 비어 있어 BUS_001을 사용합니다.")
         if not simulation_input.end_bus_id:
             warnings.append("종료 버스가 비어 있어 BUS_011을 사용합니다.")
-        if not simulation_input.candidate_site_ids:
+        if not simulation_input.candidate_site_ids and not user_candidate_points:
             warnings.append("후보지가 비어 있어 기본 후보 3개를 사용합니다.")
+        if len(user_candidate_points) < len(simulation_input.user_candidate_points):
+            warnings.append("일부 사용자 설치 후보가 InstallationPoint 계약이 아니어서 제외했습니다.")
         if scenario.created_at is None:
             scenario.created_at = created_at
 
@@ -282,6 +294,7 @@ class SimulationService:
                 start_bus_id=start_bus_id,
                 end_bus_id=end_bus_id,
                 candidate_site_ids=candidate_site_ids,
+                user_candidate_points=user_candidate_points,
             ),
             warnings,
         )
@@ -321,8 +334,7 @@ class SimulationService:
         hub_bus_id = "BUS_007" if simulation_input.end_bus_id != "BUS_007" else "BUS_010"
         hub_bus = _to_bus_node_spec(hub_bus_id)
 
-        for index, candidate_id in enumerate(simulation_input.candidate_site_ids):
-            candidate = _get_candidate(candidate_id, index)
+        for index, (candidate_id, candidate) in enumerate(_build_candidate_records(simulation_input)):
             route = self._build_candidate_route(
                 simulation_input=simulation_input,
                 candidate_id=candidate_id,
@@ -1264,6 +1276,81 @@ def _get_candidate(candidate_id: str, index: int) -> dict[str, float | str]:
         "environmental_risk": 4.5 + (index * 0.6),
         "policy_risk": 3.0 + (index * 0.4),
     }
+
+
+def _build_candidate_records(
+    simulation_input: SimulationInput,
+) -> list[tuple[str, dict[str, float | str]]]:
+    records: list[tuple[str, dict[str, float | str]]] = []
+    for candidate_id in simulation_input.candidate_site_ids:
+        if _is_user_candidate_id(candidate_id):
+            continue
+        records.append((candidate_id, _get_candidate(candidate_id, len(records))))
+
+    for installation in simulation_input.user_candidate_points:
+        candidate_id = _user_candidate_id(installation)
+        records.append((candidate_id, _candidate_from_installation(installation, simulation_input)))
+
+    return records
+
+
+def _is_user_candidate_id(candidate_id: str) -> bool:
+    return candidate_id.startswith("user:")
+
+
+def _user_candidate_id(installation: InstallationPoint) -> str:
+    return f"user:{installation.installation_id}"
+
+
+def _candidate_from_installation(
+    installation: InstallationPoint,
+    simulation_input: SimulationInput,
+) -> dict[str, float | str]:
+    start_bus = _get_bus(simulation_input.start_bus_id)
+    end_bus = _get_bus(simulation_input.end_bus_id)
+    approach_distance = _geo_distance_km(
+        float(start_bus["latitude"]),
+        float(start_bus["longitude"]),
+        installation.latitude,
+        installation.longitude,
+    )
+    exit_distance = _geo_distance_km(
+        installation.latitude,
+        installation.longitude,
+        float(end_bus["latitude"]),
+        float(end_bus["longitude"]),
+    )
+    corridor_distance = round((approach_distance + exit_distance) * 0.58, 1)
+    voltage_kv = installation.voltage_kv or 345.0
+    voltage_relief = min(8.0, voltage_kv / 90.0)
+
+    return {
+        "label": f"사용자 추가 송전탑: {installation.label}",
+        "latitude": installation.latitude,
+        "longitude": installation.longitude,
+        "distance_km": max(18.0, corridor_distance),
+        "construction_cost": round(max(10.0, corridor_distance * 0.34 + voltage_kv / 120.0), 1),
+        "congestion_relief": round(23.0 + voltage_relief, 1),
+        "environmental_risk": 5.0 if installation.elevation_m is None else 4.3,
+        "policy_risk": 3.5,
+        "source": "manual",
+        "installation_id": installation.installation_id,
+        "voltage_kv": voltage_kv,
+    }
+
+
+def _geo_distance_km(
+    start_latitude: float,
+    start_longitude: float,
+    end_latitude: float,
+    end_longitude: float,
+) -> float:
+    lat_delta = (end_latitude - start_latitude) * 111.0
+    lng_delta = (
+        (end_longitude - start_longitude)
+        * 88.8
+    )
+    return (lat_delta**2 + lng_delta**2) ** 0.5
 
 
 def _to_bus_node_spec(bus_id: str) -> BusNodeSpec:

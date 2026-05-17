@@ -853,7 +853,7 @@
   - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 98개 통과, 1개 skipped
   - `git diff --check -- tests/test_streamlit_import_safe.py tests/test_prediction_lstm_slow.py README.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
   - `.venv/bin/streamlit run app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true` -> 서버 기동
-  - `curl -I http://127.0.0.1:8501` -> HTTP 200 확인
+  - `curl -I http://127.0.0.1:8501` -> HTTP 200 확인 후 검증용 Streamlit 서버 종료
 - 다음 작업: 10번 문서/타임라인 정리에서 README와 docs의 실행 방법, env/secrets, 테스트 marker, fallback 정책을 최종 형태로 더 다듬거나, domain 스텁을 실제 계약/fixture 중심으로 정리한다.
 
 ### 2026-05-17 10번 문서/타임라인 정리 완료
@@ -873,3 +873,46 @@
   - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 98개 통과, 1개 skipped
   - `curl -I http://127.0.0.1:8501` -> HTTP 200 확인 후 검증용 Streamlit 서버 종료
 - 다음 작업: domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하거나, ScenarioService 저장 대상을 설치 지점/페이지 입력값까지 확장할지 후속 계약을 정한다.
+
+### 2026-05-17 ScenarioService 저장 범위 확장 완료
+- 작업: `ScenarioService` 저장 대상을 `ScenarioContext` 단독에서 `SavedScenarioState(scenario + page_state)`로 확장했다. `ScenarioPageState`는 랜딩 지도 설치 지점, Monitoring 부하 배율/데이터 소스, Simulation 시작/종료 버스·후보지·부하 배율, Prediction 모델·부하 배율·선택 노드를 저장한다. 계산 결과와 overlay 캐시는 저장하지 않고, 시나리오를 불러올 때 결과 캐시를 비워 같은 입력 조건으로 다시 실행되게 했다.
+- 작업 전 기준선:
+  - `git status --short` 기준 대량 modified 파일이 이미 존재한다. 이번 작업은 시나리오 저장 계약, 공통 sidebar, 세 페이지 입력 키, 문서/테스트만 수정했고 기존 unrelated dirty 파일은 되돌리지 않았다.
+  - Python: `.venv/bin/python` -> `Python 3.10.12`
+  - Streamlit: `1.57.0`
+  - pytest: `9.0.3`
+- 수정 파일: `src/data/schemas.py`, `src/services/scenario_service.py`, `src/ui/scenario_controls.py`, `pages/01_monitoring.py`, `pages/02_simulation.py`, `pages/03_prediction.py`, `tests/test_scenario_service.py`, `tests/test_scenario_ui_contract.py`, `AGENTS.md`, `README.md`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 저장: sidebar의 `현재 시나리오 저장` -> `collect_current_page_state()` -> `ScenarioService.save_scenario_state()` -> `data/private/scenarios.json`.
+  - 불러오기: `load_scenario_state()` -> `set_shared_scenario()` -> `apply_saved_page_state()` -> 페이지 입력값 복원 및 Monitoring/Simulation/Prediction 결과 캐시 초기화.
+  - 기존 `ScenarioContext`만 들어 있던 JSON은 `load_scenario_state()`에서 기본 `ScenarioPageState()`를 붙여 계속 읽는다.
+  - `save_scenario()` legacy 호출은 기존 page_state가 있으면 유지하므로 기존 호출부가 저장 상태를 지우지 않는다.
+  - Monitoring/Simulation/Prediction 위젯은 저장 가능한 session state key를 명시적으로 사용한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_scenario_service.py tests/test_scenario_ui_contract.py -q` -> 22개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_monitoring_page_contract.py tests/test_simulation_page_contract.py tests/test_prediction_page_contract.py -q` -> 18개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 90개 통과, 14개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 103개 통과, 1개 skipped
+  - `git diff --check -- AGENTS.md README.md WORK_TIMELINE.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md src/data/schemas.py src/services/scenario_service.py src/ui/scenario_controls.py pages/01_monitoring.py pages/02_simulation.py pages/03_prediction.py tests/test_scenario_service.py tests/test_scenario_ui_contract.py` -> 통과
+  - `.venv/bin/streamlit run app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true` -> sandbox socket 제한으로 일반 실행은 실패, escalation 후 서버 기동
+  - `curl -I http://127.0.0.1:8501` -> HTTP 200 확인
+- 다음 작업: domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하거나, VWorld 고도 조회 metadata 확장 계약을 구현한다.
+
+### 2026-05-17 랜딩 설치 지점 Simulation 후보 연결 완료
+- 작업: app landing에서 지도 클릭으로 추가한 송전탑 설치 지점이 Simulation 후보 목록, 추천 결과, 지도 overlay까지 이어지도록 연결했다. `SimulationInput`에 `user_candidate_points`를 추가했고, Simulation 페이지는 `sgop_landing_installations` 중 `kind="transmission_tower"`인 항목을 `user:<installation_id>` 후보로 변환해 기존 후보지 multiselect에 합친다. `SimulationService`는 사용자 후보를 route/score/recommendation 대상으로 변환하고, `MapOverlayService`는 사용자 후보 marker/route에 `candidate_source="landing_installation"`과 `installation_id` metadata를 남긴다.
+- 수정 파일: `src/data/schemas.py`, `src/services/simulation_service.py`, `src/services/map_overlay_service.py`, `pages/02_simulation.py`, `tests/test_simulation_route_score.py`, `tests/test_simulation_page_contract.py`, `tests/test_map_overlay_contract.py`, `AGENTS.md`, `README.md`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - app landing: 지도 클릭 -> 설치 대상 `송전탑` -> `InstallationPoint` 저장.
+  - Simulation: `sgop_landing_installations` 읽기 -> `user:<installation_id>` 후보 option 추가 -> 선택값을 기존 후보와 사용자 후보로 분리.
+  - Service: 기존 후보는 `candidate_site_ids`, 사용자 후보는 `user_candidate_points`로 받아 같은 A*/score/recommendation 루프에서 처리.
+  - Overlay: 사용자 후보 point는 `source="manual"`, route는 Simulation source를 유지하며, marker/route metadata에 원 설치 ID를 남긴다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_simulation_route_score.py tests/test_simulation_page_contract.py tests/test_map_overlay_contract.py -q` -> 22개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_scenario_service.py tests/test_scenario_ui_contract.py tests/test_service_integration_contract.py -q` -> 27개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 93개 통과, 14개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 106개 통과, 1개 skipped
+  - `git diff --check -- AGENTS.md README.md WORK_TIMELINE.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md src/data/schemas.py src/services/simulation_service.py src/services/map_overlay_service.py pages/02_simulation.py tests/test_simulation_route_score.py tests/test_simulation_page_contract.py tests/test_map_overlay_contract.py` -> 통과
+  - `curl -I http://127.0.0.1:8501` -> HTTP 200 확인
+- 다음 작업: 실제 브라우저에서 app landing 송전탑 추가 -> Simulation 후보 선택 -> 실행 -> 지도/추천표 표시를 수동 확인하거나, domain 스텁을 실제 모델로 정리한다.

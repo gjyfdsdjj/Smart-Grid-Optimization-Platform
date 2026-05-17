@@ -1,17 +1,36 @@
 """공통 시나리오 sidebar UI와 session state 관리를 제공한다."""
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from datetime import datetime
-from typing import Iterable
+from typing import Any, Iterable
 
 import streamlit as st
 
-from src.data.schemas import ScenarioContext
+from src.data.schemas import (
+    InstallationPoint,
+    SavedScenarioState,
+    ScenarioContext,
+    ScenarioPageState,
+)
 from src.services.scenario_service import ScenarioService
 
 
 SCENARIO_STATE_KEY = "sgop_shared_scenario"
 SCENARIO_NOTICE_KEY = "sgop_scenario_notice"
+PAGE_STATE_RESTORE_PENDING_KEY = "sgop_page_state_restore_pending"
+LANDING_INSTALLATIONS_KEY = "sgop_landing_installations"
+MONITORING_LOAD_SCALE_KEY = "monitoring_load_scale"
+MONITORING_DATA_SOURCE_KEY = "monitoring_data_source"
+SIMULATION_START_BUS_KEY = "simulation_start_bus_id"
+SIMULATION_END_BUS_KEY = "simulation_end_bus_id"
+SIMULATION_CANDIDATES_KEY = "simulation_candidate_site_ids"
+SIMULATION_LOAD_SCALE_KEY = "simulation_load_scale"
+PREDICTION_LOAD_SCALE_KEY = "prediction_load_scale"
+PREDICTION_MODEL_SOURCE_KEY = "prediction_model_source"
+PREDICTION_SELECTED_BUS_IDS_KEY = "prediction_selected_bus_ids"
+PREDICTION_RETRAIN_KEY = "prediction_retrain"
+PREDICTION_EPOCHS_KEY = "prediction_epochs"
 
 DEFAULT_SCENARIO_ID = "sgop-demo-scenario"
 DEFAULT_SCENARIO_TITLE = "SGOP Demo Scenario"
@@ -27,10 +46,7 @@ _SCENARIO_BOUND_RESULT_KEYS = (
     "sim_result",
     "sim_map_capability",
     "sim_map_overlay",
-    "selected_candidates",
     "pred_result",
-    "pred_scale",
-    "pred_source",
     "pred_map_capability",
     "pred_map_overlay",
     "prediction_selected_line_id",
@@ -41,6 +57,86 @@ _SCENARIO_BOUND_RESULT_KEYS = (
 def scenario_result_state_keys() -> tuple[str, ...]:
     """시나리오가 바뀔 때 폐기해야 하는 화면 결과 캐시 키를 반환한다."""
     return _SCENARIO_BOUND_RESULT_KEYS
+
+
+def collect_current_page_state(
+    state: MutableMapping[str, Any] | None = None,
+) -> ScenarioPageState:
+    """현재 Streamlit session의 페이지 입력값을 저장 계약으로 모은다."""
+    session_state = state if state is not None else st.session_state
+    return ScenarioPageState(
+        landing_installations=_coerce_installations(
+            session_state.get(LANDING_INSTALLATIONS_KEY, [])
+        ),
+        monitoring_load_scale=_float_from_state(
+            session_state,
+            MONITORING_LOAD_SCALE_KEY,
+            1.0,
+        ),
+        monitoring_data_source=str(
+            session_state.get(MONITORING_DATA_SOURCE_KEY) or "DC Power Flow"
+        ),
+        simulation_start_bus_id=str(session_state.get(SIMULATION_START_BUS_KEY) or "BUS_001"),
+        simulation_end_bus_id=str(session_state.get(SIMULATION_END_BUS_KEY) or "BUS_011"),
+        simulation_candidate_site_ids=_str_list_from_state(
+            session_state.get(
+                SIMULATION_CANDIDATES_KEY,
+                session_state.get("selected_candidates", []),
+            )
+        ),
+        simulation_load_scale=_float_from_state(
+            session_state,
+            SIMULATION_LOAD_SCALE_KEY,
+            1.0,
+        ),
+        prediction_load_scale=_float_from_state(
+            session_state,
+            PREDICTION_LOAD_SCALE_KEY,
+            _float_from_state(session_state, "pred_scale", 1.0),
+        ),
+        prediction_model_source=str(
+            session_state.get(PREDICTION_MODEL_SOURCE_KEY)
+            or session_state.get("pred_source")
+            or "Mock"
+        ),
+        prediction_selected_bus_ids=_str_list_from_state(
+            session_state.get(PREDICTION_SELECTED_BUS_IDS_KEY, [])
+        ),
+        prediction_retrain=bool(session_state.get(PREDICTION_RETRAIN_KEY, False)),
+        prediction_epochs=_int_from_state(session_state, PREDICTION_EPOCHS_KEY, 20),
+    )
+
+
+def apply_saved_page_state(
+    page_state: ScenarioPageState,
+    *,
+    state: MutableMapping[str, Any] | None = None,
+    clear_results: bool = True,
+) -> None:
+    """저장된 페이지 입력 상태를 session state에 복원한다."""
+    if not isinstance(page_state, ScenarioPageState):
+        raise TypeError("page_state는 ScenarioPageState여야 합니다.")
+
+    session_state = state if state is not None else st.session_state
+    session_state[LANDING_INSTALLATIONS_KEY] = list(page_state.landing_installations)
+    session_state["sgop_landing_last_click"] = None
+    session_state["sgop_landing_add_requested"] = False
+    session_state[MONITORING_LOAD_SCALE_KEY] = page_state.monitoring_load_scale
+    session_state[MONITORING_DATA_SOURCE_KEY] = page_state.monitoring_data_source
+    session_state[SIMULATION_START_BUS_KEY] = page_state.simulation_start_bus_id
+    session_state[SIMULATION_END_BUS_KEY] = page_state.simulation_end_bus_id
+    session_state[SIMULATION_CANDIDATES_KEY] = list(page_state.simulation_candidate_site_ids)
+    session_state["selected_candidates"] = list(page_state.simulation_candidate_site_ids)
+    session_state[SIMULATION_LOAD_SCALE_KEY] = page_state.simulation_load_scale
+    session_state[PREDICTION_LOAD_SCALE_KEY] = page_state.prediction_load_scale
+    session_state[PREDICTION_MODEL_SOURCE_KEY] = page_state.prediction_model_source
+    session_state[PREDICTION_SELECTED_BUS_IDS_KEY] = list(page_state.prediction_selected_bus_ids)
+    session_state[PREDICTION_RETRAIN_KEY] = page_state.prediction_retrain
+    session_state[PREDICTION_EPOCHS_KEY] = page_state.prediction_epochs
+    session_state[PAGE_STATE_RESTORE_PENDING_KEY] = True
+
+    if clear_results:
+        clear_scenario_bound_results(state=session_state)
 
 
 def build_default_scenario(now: datetime | None = None) -> ScenarioContext:
@@ -115,11 +211,12 @@ def get_or_create_shared_scenario() -> ScenarioContext:
     return scenario
 
 
-def clear_scenario_bound_results() -> None:
+def clear_scenario_bound_results(state: MutableMapping[str, Any] | None = None) -> None:
     """시나리오 변경 뒤 이전 결과가 화면에 남지 않도록 관련 캐시를 비운다."""
+    session_state = state if state is not None else st.session_state
     for key in _SCENARIO_BOUND_RESULT_KEYS:
-        st.session_state.pop(key, None)
-    st.session_state.sim_run = False
+        session_state.pop(key, None)
+    session_state["sim_run"] = False
 
 
 def set_shared_scenario(
@@ -234,7 +331,13 @@ def _render_save_form(
             current=current,
         )
         overwrites_existing = scenario_exists(saved_scenarios, next_scenario.scenario_id)
-        saved = scenario_service.save_scenario(next_scenario)
+        saved_state = scenario_service.save_scenario_state(
+            SavedScenarioState(
+                scenario=next_scenario,
+                page_state=collect_current_page_state(),
+            )
+        )
+        saved = saved_state.scenario
         changed_scenario_id = saved.scenario_id != current.scenario_id
         set_shared_scenario(saved, clear_results=changed_scenario_id)
     except (TypeError, ValueError) as exc:
@@ -269,13 +372,17 @@ def _render_load_controls(
     )
     if st.button("시나리오 불러오기", key="scenario_load_button", use_container_width=True):
         try:
-            loaded = scenario_service.load_scenario(selected_id)
+            loaded_state = scenario_service.load_scenario_state(selected_id)
         except (KeyError, TypeError, ValueError) as exc:
             st.error(f"시나리오 불러오기 실패: {exc}")
             return
 
-        set_shared_scenario(loaded, clear_results=True)
-        _set_notice(f"`{loaded.scenario_id}` 시나리오를 불러왔습니다.", level="success")
+        set_shared_scenario(loaded_state.scenario, clear_results=False)
+        apply_saved_page_state(loaded_state.page_state, clear_results=True)
+        _set_notice(
+            f"`{loaded_state.scenario.scenario_id}` 시나리오를 불러왔습니다.",
+            level="success",
+        )
         st.rerun()
 
 
@@ -321,6 +428,7 @@ def _render_delete_controls(
         current = get_or_create_shared_scenario()
         if current.scenario_id == selected_id:
             set_shared_scenario(build_default_scenario(), clear_results=True)
+            apply_saved_page_state(ScenarioPageState(), clear_results=True)
         else:
             clear_scenario_bound_results()
         _set_notice(f"`{selected_id}` 시나리오를 삭제했습니다.", level="success")
@@ -348,3 +456,95 @@ def _render_notice() -> None:
         st.error(message)
     else:
         st.info(message)
+
+
+def _coerce_installations(value: object) -> list[InstallationPoint]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        return []
+
+    installations: list[InstallationPoint] = []
+    for item in value:
+        installation = _coerce_installation(item)
+        if installation is not None:
+            installations.append(installation)
+    return installations
+
+
+def _coerce_installation(value: object) -> InstallationPoint | None:
+    if isinstance(value, InstallationPoint):
+        return value
+    if not isinstance(value, dict):
+        return None
+
+    installation_id = str(value.get("installation_id", "") or "").strip()
+    if not installation_id:
+        return None
+
+    created_at = value.get("created_at")
+    if not isinstance(created_at, datetime):
+        created_at = None
+
+    return InstallationPoint(
+        installation_id=installation_id,
+        label=str(value.get("label", "") or ""),
+        kind=str(value.get("kind") or "transmission_tower"),  # type: ignore[arg-type]
+        latitude=_float_value(value.get("latitude"), 0.0),
+        longitude=_float_value(value.get("longitude"), 0.0),
+        mode=str(value.get("mode") or "new"),  # type: ignore[arg-type]
+        elevation_m=_optional_float_value(value.get("elevation_m")),
+        coordinate_system=str(value.get("coordinate_system") or "EPSG:4326"),
+        elevation_source=str(value.get("elevation_source") or "not_queried"),
+        capacity_mw=_optional_float_value(value.get("capacity_mw")),
+        voltage_kv=_optional_float_value(value.get("voltage_kv")),
+        notes=str(value.get("notes", "") or ""),
+        created_at=created_at,
+        metadata=dict(value.get("metadata") or {}),
+    )
+
+
+def _float_from_state(
+    state: MutableMapping[str, Any],
+    key: str,
+    default: float,
+) -> float:
+    return _float_value(state.get(key, default), default)
+
+
+def _int_from_state(
+    state: MutableMapping[str, Any],
+    key: str,
+    default: int,
+) -> int:
+    value = state.get(key, default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_value(value: object, default: float) -> float:
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _optional_float_value(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _str_list_from_state(value: object) -> list[str]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]

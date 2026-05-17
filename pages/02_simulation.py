@@ -5,6 +5,7 @@ import streamlit as st
 
 from src.data.adapters.vworld_adapter import MapCapability, get_map_capability
 from src.data.schemas import (
+    InstallationPoint,
     MapOverlayResult,
     ScoreBreakdown,
     SimulationResult,
@@ -13,9 +14,43 @@ from src.services.map_overlay_service import MapOverlayService
 from src.services.monitoring_service import MonitoringService
 from src.services.simulation_service import SimulationService
 from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay
+from src.ui.scenario_controls import (
+    LANDING_INSTALLATIONS_KEY,
+    SIMULATION_CANDIDATES_KEY,
+    SIMULATION_END_BUS_KEY,
+    SIMULATION_LOAD_SCALE_KEY,
+    SIMULATION_START_BUS_KEY,
+)
 from src.ui.scenario_controls import render_scenario_sidebar
 
 st.set_page_config(page_title="시뮬레이션 | SGOP", layout="wide")
+
+
+def _user_candidate_id(installation: InstallationPoint) -> str:
+    return f"user:{installation.installation_id}"
+
+
+def _split_candidate_selection(
+    selected_candidate_ids: list[str],
+    user_installations: list[InstallationPoint],
+) -> tuple[list[str], list[InstallationPoint]]:
+    selected_user_ids = {
+        candidate_id
+        for candidate_id in selected_candidate_ids
+        if candidate_id.startswith("user:")
+    }
+    engine_candidate_ids = [
+        candidate_id
+        for candidate_id in selected_candidate_ids
+        if not candidate_id.startswith("user:")
+    ]
+    user_candidate_points = [
+        installation
+        for installation in user_installations
+        if _user_candidate_id(installation) in selected_user_ids
+    ]
+    return engine_candidate_ids, user_candidate_points
+
 
 # --- 1. 서비스 초기화 및 색상 로직 ---
 @st.cache_resource
@@ -29,10 +64,49 @@ shared_scenario = render_scenario_sidebar()
 
 bus_options = sim_service.list_bus_options()
 candidate_options = sim_service.list_candidate_options()
+bus_ids = [bus_id for bus_id, _label in bus_options]
+landing_tower_installations = [
+    installation
+    for installation in st.session_state.get(LANDING_INSTALLATIONS_KEY, [])
+    if isinstance(installation, InstallationPoint)
+    and installation.kind == "transmission_tower"
+]
+user_candidate_options = [
+    (_user_candidate_id(installation), f"사용자 추가 송전탑: {installation.label}")
+    for installation in landing_tower_installations
+]
+all_candidate_options = candidate_options + user_candidate_options
+candidate_ids = [candidate_id for candidate_id, _label in all_candidate_options]
+candidate_label_by_id = dict(all_candidate_options)
+default_end_bus = bus_ids[10] if len(bus_ids) > 10 else bus_ids[-1]
 
 # --- 세션 상태(Session State) 초기화 ---
 if 'sim_run' not in st.session_state:
     st.session_state.sim_run = False
+if st.session_state.get(SIMULATION_START_BUS_KEY) not in bus_ids:
+    st.session_state[SIMULATION_START_BUS_KEY] = bus_ids[0]
+if st.session_state.get(SIMULATION_END_BUS_KEY) not in bus_ids:
+    st.session_state[SIMULATION_END_BUS_KEY] = default_end_bus
+if SIMULATION_CANDIDATES_KEY not in st.session_state:
+    st.session_state[SIMULATION_CANDIDATES_KEY] = list(candidate_ids)
+elif isinstance(st.session_state[SIMULATION_CANDIDATES_KEY], list):
+    st.session_state[SIMULATION_CANDIDATES_KEY] = [
+        candidate_id
+        for candidate_id in st.session_state[SIMULATION_CANDIDATES_KEY]
+        if candidate_id in candidate_ids
+    ]
+else:
+    st.session_state[SIMULATION_CANDIDATES_KEY] = list(candidate_ids)
+if SIMULATION_LOAD_SCALE_KEY not in st.session_state:
+    st.session_state[SIMULATION_LOAD_SCALE_KEY] = 1.0
+else:
+    try:
+        st.session_state[SIMULATION_LOAD_SCALE_KEY] = max(
+            0.5,
+            min(float(st.session_state[SIMULATION_LOAD_SCALE_KEY]), 1.5),
+        )
+    except (TypeError, ValueError):
+        st.session_state[SIMULATION_LOAD_SCALE_KEY] = 1.0
 
 def _build_recommendation_rows(sim_result: SimulationResult) -> list[dict]:
     rows: list[dict] = []
@@ -143,17 +217,35 @@ with st.sidebar:
     st.header("⚡ 시뮬레이션 제어")
     
     with st.form("simulation_form"):
-        start_bus = st.selectbox("시작 버스", options=[b[0] for b in bus_options], format_func=lambda x: dict(bus_options)[x], index=0)
-        end_bus = st.selectbox("종료 버스", options=[b[0] for b in bus_options], format_func=lambda x: dict(bus_options)[x], index=10)
+        start_bus = st.selectbox(
+            "시작 버스",
+            options=bus_ids,
+            format_func=lambda x: dict(bus_options)[x],
+            key=SIMULATION_START_BUS_KEY,
+        )
+        end_bus = st.selectbox(
+            "종료 버스",
+            options=bus_ids,
+            format_func=lambda x: dict(bus_options)[x],
+            key=SIMULATION_END_BUS_KEY,
+        )
         
         selected_candidates = st.multiselect(
             "경유 후보지 선택", 
-            options=[c[0] for c in candidate_options],
-            default=[c[0] for c in candidate_options],
-            format_func=lambda x: dict(candidate_options)[x]
+            options=candidate_ids,
+            format_func=lambda x: candidate_label_by_id[x]
+            if x in candidate_label_by_id
+            else x,
+            key=SIMULATION_CANDIDATES_KEY,
         )
         
-        load_scale = st.slider("시스템 전체 부하 배율", 0.5, 1.5, 1.0, 0.05)
+        load_scale = st.slider(
+            "시스템 전체 부하 배율",
+            0.5,
+            1.5,
+            step=0.05,
+            key=SIMULATION_LOAD_SCALE_KEY,
+        )
         
         submitted = st.form_submit_button("🚀 시뮬레이션 실행", type="primary", use_container_width=True)
 
@@ -163,13 +255,18 @@ st.title("🗺️ 송전망 혼잡도 및 A* 최적 경로 시뮬레이션")
 if submitted:
     with st.spinner("AI가 최적 경로 및 혼잡도를 계산 중입니다... 🔄"):
         shared_created_at = shared_scenario.created_at
+        engine_candidate_ids, user_candidate_points = _split_candidate_selection(
+            selected_candidates,
+            landing_tower_installations,
+        )
 
         sim_input = sim_service.build_default_input(
             scenario=shared_scenario,
             created_at=shared_created_at,
             start_bus_id=start_bus, 
             end_bus_id=end_bus, 
-            candidate_site_ids=selected_candidates, 
+            candidate_site_ids=engine_candidate_ids,
+            user_candidate_points=user_candidate_points,
             load_scale=load_scale
         )
         sim_result = sim_service.run_simulation(
@@ -202,13 +299,17 @@ if st.session_state.sim_run:
         st.session_state.sim_map_capability = map_capability
         st.session_state.sim_map_overlay = map_overlay
     selected_candidates = st.session_state.selected_candidates
+    candidate_count = (
+        len(sim_result.simulation_input.candidate_site_ids)
+        + len(sim_result.simulation_input.user_candidate_points)
+    )
 
     # 팀원들이 추가한 안내 메시지 및 시나리오 캡션
     st.caption(
         f"시나리오: {sim_result.scenario.scenario_id}  |  "
         f"입력: {sim_result.simulation_input.start_bus_id} -> "
         f"{sim_result.simulation_input.end_bus_id}  |  "
-        f"후보지 {len(sim_result.simulation_input.candidate_site_ids)}개  |  "
+        f"후보지 {candidate_count}개  |  "
         f"부하 배율 {sim_result.simulation_input.load_scale:.2f}x  |  "
         f"소스: {sim_result.source.upper()}"
     )

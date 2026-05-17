@@ -10,6 +10,7 @@ from src.data.schemas import MonitoringKpi, MonitoringResult, ScenarioContext
 from src.services.map_overlay_service import MapOverlayService
 from src.services.monitoring_service import MonitoringService
 from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay
+from src.ui.scenario_controls import MONITORING_DATA_SOURCE_KEY, MONITORING_LOAD_SCALE_KEY
 from src.ui.scenario_controls import render_scenario_sidebar
 from src.ui.table_selection import selected_value_from_dataframe_event
 
@@ -58,6 +59,21 @@ def _fmt_kpi_delta(kpi: MonitoringKpi) -> str | None:
 service = MonitoringService()
 overlay_service = MapOverlayService()
 shared_scenario = render_scenario_sidebar()
+_DATA_SOURCE_OPTIONS = ["mock", "DC Power Flow"]
+
+if MONITORING_LOAD_SCALE_KEY not in st.session_state:
+    st.session_state[MONITORING_LOAD_SCALE_KEY] = 1.0
+else:
+    try:
+        st.session_state[MONITORING_LOAD_SCALE_KEY] = max(
+            0.5,
+            min(float(st.session_state[MONITORING_LOAD_SCALE_KEY]), 1.5),
+        )
+    except (TypeError, ValueError):
+        st.session_state[MONITORING_LOAD_SCALE_KEY] = 1.0
+
+if st.session_state.get(MONITORING_DATA_SOURCE_KEY) not in _DATA_SOURCE_OPTIONS:
+    st.session_state[MONITORING_DATA_SOURCE_KEY] = "DC Power Flow"
 
 
 def _load_monitoring_result(
@@ -101,16 +117,16 @@ with st.sidebar:
         "부하 배율",
         min_value=0.5,
         max_value=1.5,
-        value=1.0,
         step=0.05,
         help="전체 부하의 배율. 1.3 이상이면 위험·과부하 선로가 늘어납니다.",
+        key=MONITORING_LOAD_SCALE_KEY,
     )
     st.divider()
     data_source = st.radio(
         "데이터 소스",
-        options=["mock", "DC Power Flow"],
-        index=1,
+        options=_DATA_SOURCE_OPTIONS,
         help="mock: 고정 합성 데이터 (빠름) / DC Power Flow: 선형 조류 계산 (실제 물리 모델)",
+        key=MONITORING_DATA_SOURCE_KEY,
     )
     st.divider()
     if st.button("새로고침", width="stretch"):

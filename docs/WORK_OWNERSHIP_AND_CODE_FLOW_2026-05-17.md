@@ -303,6 +303,7 @@ app.py
 - 사용자가 지도에서 선택한 지점은 `InstallationPoint`로 저장되며, 화면에는 x/y만 표시하고 내부에는 고도 미조회 상태를 남긴다.
 - `pages/01_monitoring.py`는 `MonitoringService.run_dc_power_flow()`를 제품 기본 데이터 소스로 사용하고, 결과를 `MapOverlayService.build_monitoring_overlay()`에 연결해 선로 지도와 상태표를 같은 `line_id` 기준으로 동기화한다.
 - `pages/02_simulation.py`는 더 이상 페이지 안에서 `dc_power_flow.solve()`와 선로 좌표 dict를 직접 조립하지 않고, `MonitoringService.run_dc_power_flow()` 결과를 `MapOverlayService.build_simulation_overlay(..., baseline_monitoring=...)`에 넘겨 기존 선로/후보지/추천 경로를 같은 overlay 계약으로 렌더링한다.
+- app landing에서 추가한 송전탑 설치 지점은 `sgop_landing_installations`에 `InstallationPoint`로 유지되고, Simulation 페이지에서 `user:<installation_id>` 후보지로 변환되어 기존 후보지와 같은 multiselect, route, score, recommendation, overlay 흐름을 탄다.
 - `pages/02_simulation.py`의 로컬 Folium helper는 제거되었고, 지도 표시는 `src/ui/map_overlay_renderer.render_map_overlay()`가 맡는다. Folium이 없을 때도 후보지 point 표를 함께 보여주도록 `show_point_table=True`를 사용한다.
 - `SimulationService.build_default_input(candidate_site_ids=[])`는 사용자의 빈 후보 선택을 보존한 뒤 `_normalize_input()`에서 기본 후보와 service warning으로 처리한다.
 - `SimulationService`의 mock/actual/heuristic 손실 delta 단위는 모두 `MW`로 통일한다.
@@ -313,10 +314,12 @@ app.py
 - `tests/test_model_quality.py`는 `integration` marker가 적용되어 빠른 테스트 명령에서는 제외할 수 있다.
 
 ## 2026-05-17 ScenarioService UI 연결
-- `src/services/scenario_service.py`는 `data/private/scenarios.json`에 `ScenarioContext`를 저장, 조회, 목록화, 삭제한다. 저장소 파일이 없으면 빈 목록으로 처리하고, 잘못된 JSON은 `ValueError`로 UI에 전달된다.
+- `src/services/scenario_service.py`는 `data/private/scenarios.json`에 `ScenarioContext`와 `ScenarioPageState`를 묶은 `SavedScenarioState`를 저장, 조회, 목록화, 삭제한다. 저장소 파일이 없으면 빈 목록으로 처리하고, 잘못된 JSON은 `ValueError`로 UI에 전달된다.
+- `ScenarioPageState`는 랜딩 지도 설치 지점 목록, Monitoring 부하 배율/데이터 소스, Simulation 시작/종료 버스/후보지/부하 배율, Prediction 모델/부하 배율/선택 노드를 저장한다. 계산 결과 자체는 저장하지 않는다.
+- 기존 `ScenarioContext`만 들어 있던 저장 JSON은 계속 읽을 수 있으며, 이 경우 `page_state`는 기본값으로 보강된다.
 - `src/ui/scenario_controls.py`는 공통 sidebar의 `시나리오 관리` expander를 담당한다. 기본 시나리오 생성, 저장 입력 정규화, 저장 목록 라벨, 불러오기, 삭제 확인, 시나리오 변경 시 결과 캐시 초기화를 한 곳에 모았다.
 - `app.py`, `pages/01_monitoring.py`, `pages/02_simulation.py`, `pages/03_prediction.py`는 더 이상 각자 `_get_shared_scenario()`를 만들지 않고 `render_scenario_sidebar()`에서 받은 `ScenarioContext`를 사용한다.
-- 시나리오를 불러오거나 현재 시나리오를 삭제하면 Monitoring 결과/overlay, Simulation 결과/overlay, Prediction 결과/overlay, Prediction A/B 비교 캐시가 초기화된다. 따라서 새 `scenario_id`에서 이전 결과가 계속 표시되지 않는다.
+- 시나리오를 불러오거나 현재 시나리오를 삭제하면 Monitoring 결과/overlay, Simulation 결과/overlay, Prediction 결과/overlay, Prediction A/B 비교 캐시가 초기화된다. 저장된 입력값은 복원하지만 결과 캐시는 비우므로 새 `scenario_id`에서 이전 결과가 계속 표시되지 않는다.
 - 같은 `scenario_id`로 저장하면 `ScenarioService.save_scenario()`가 기존 저장본을 덮어쓴다. 삭제는 checkbox 확인 후에만 실행된다.
 - 저장된 시나리오를 불러온 뒤 Monitoring/Simulation/Prediction은 같은 `sgop_shared_scenario.scenario_id`를 서비스 입력으로 사용한다.
 
@@ -343,7 +346,8 @@ app.py
 - Monitoring: `pages/01_monitoring.py` -> `MonitoringService.run_dc_power_flow()` -> `MapOverlayService.build_monitoring_overlay()` -> `render_map_overlay(selected_line_id=...)`.
 - Simulation: `pages/02_simulation.py` -> `SimulationService.run_simulation()` -> `MonitoringService.run_dc_power_flow()` baseline -> `MapOverlayService.build_simulation_overlay()` -> `render_map_overlay()`.
 - Prediction: `pages/03_prediction.py` -> `PredictionService.run_*_prediction()` -> `MapOverlayService.build_prediction_overlay()` -> `render_map_overlay(selected_line_id=...)`.
-- Scenario: 공통 sidebar의 `render_scenario_sidebar()` -> `ScenarioService` -> `data/private/scenarios.json` 저장소 -> app/Monitoring/Simulation/Prediction 공통 `sgop_shared_scenario`.
+- Scenario: 공통 sidebar의 `render_scenario_sidebar()` -> `collect_current_page_state()` -> `ScenarioService.save_scenario_state()` -> `data/private/scenarios.json` 저장소 -> `load_scenario_state()` -> `apply_saved_page_state()` -> app/Monitoring/Simulation/Prediction 공통 `sgop_shared_scenario`.
+- Landing to Simulation: `app.py` 지도 클릭 -> `InstallationPoint(kind="transmission_tower")` -> `sgop_landing_installations` -> `pages/02_simulation.py` 사용자 후보 option `user:<installation_id>` -> `SimulationInput.user_candidate_points` -> `SimulationService` route/score/recommendation -> `MapOverlayService.build_simulation_overlay()`.
 - 검증: `README.md`의 compileall, 빠른 pytest, 전체 pytest, integration/slow marker, Streamlit 8501 HTTP 확인 명령을 기준으로 한다.
 
 ## 현재 남은 구조적 갭
@@ -354,5 +358,5 @@ app.py
 
 ## 다음 구현 권장 순서
 1. domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하되, 먼저 `schemas.py`와 중복되는 책임 경계를 정한다.
-2. ScenarioService가 현재는 `ScenarioContext`만 저장하므로, 설치 지점과 페이지 입력값까지 시나리오 저장 대상에 포함할지 후속 계약을 정한다.
-3. 실제 VWorld 고도 조회를 붙이기 전 elevation_source, 조회 시각, fallback 여부를 service metadata로 확장한다.
+2. 실제 VWorld 고도 조회를 붙이기 전 elevation_source, 조회 시각, fallback 여부를 service metadata로 확장한다.
+3. Scenario 저장 상태에 결과 비교 스냅샷을 포함할지는 별도 계약으로 정한다. 현재 저장 범위는 입력값과 설치 지점까지다.
