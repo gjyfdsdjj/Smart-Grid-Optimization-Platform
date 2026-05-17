@@ -490,3 +490,157 @@
   - `.venv310/bin/python -m compileall app.py pages src tests` -> 통과
   - `.venv310/bin/python -m pytest tests -q` -> 43개 통과
 - 다음 작업: 박차오름 4주차 범위는 완료로 보고, Alpha는 Monitoring 표/지도 동기화에 `MapOverlayResult.lines`의 `line_id`를 사용하고, Beta는 Simulation 지도 레이어에 `MapOverlayResult.points/routes`를 연결하면 된다. Gamma의 예측 품질과 LSTM slow/integration 테스트는 별도 범위로 남긴다.
+
+### 2026-05-17 저장소 전체 구조 파악
+- 작업: 사용자 요청에 따라 `git status --short`를 먼저 확인하고, `AGENTS.md`, `WORK_TIMELINE.md`, 회의안, 개발 흐름도, 주요 페이지/서비스/엔진/스키마/테스트/문서/설정 파일과 디렉토리 구조를 전수 확인했다. 대용량 CSV는 행 수, 헤더, 샘플, 시간 범위를 확인했고, 바이너리 PDF/PPTX/model/scaler 파일은 파일 타입, 크기, 내부 목차 또는 메타데이터 수준으로 확인했다.
+- 수정 파일: `WORK_TIMELINE.md`
+- 검증:
+  - `git status --short` -> 기존 수정 파일 다수 확인
+  - `rg --files -uu -g '!/.git/**' -g '!**/__pycache__/**' -g '!**/.pytest_cache/**'` -> 저장소 파일 목록 확인
+  - `find . -path ./.git -prune -o -path '*/__pycache__' -prune -o -path '*/.pytest_cache' -prune -o -print` -> 디렉토리 구조 확인
+  - `wc -l app.py pages/*.py src/**/*.py src/**/**/*.py tests/*.py requirements.txt pytest.ini .env.example .streamlit/config.toml README.md docs/*.md meeting_plan/*.md DEVELOPMENT_FLOW_2026-03-30.md data/**/*.md models/**/*.md models/README.md secrets/README.md` -> 주요 텍스트 파일 규모 확인
+  - `wc -l data/raw/*.csv data/weather/*.csv` -> 원본/날씨 CSV 행 수 확인
+  - `file` 및 Python `zipfile`/바이트 메타데이터 확인 -> PDF/PPTX/LSTM 모델 산출물 확인
+- 다음 작업: 실제 구현을 이어간다면 `MapOverlayService`의 공통 overlay 계약을 `pages/01_monitoring.py`와 `pages/02_simulation.py` 지도 렌더링에 연결하고, Simulation 페이지의 페이지 직접 DC/Folium 조립을 서비스/overlay 기반으로 낮춘다.
+
+### 2026-05-17 Git 기록 기반 다중 작업자 타임라인 보강
+- 작업: 기존 `WORK_TIMELINE.md`가 주로 waterspouut/박차오름 통합 작업 위주로 기록되어 있어, Git commit author와 merge 기록을 기준으로 다른 작업자들의 작업도 날짜순으로 보강했다. 사용자가 언급한 `hss86212002@gmail.com`은 현재 Git 기록에 없고, 실제 기록은 `hss85212002@gmail.com`로 확인된다. `gimdorim <165128099+gjyfdsdjj@users.noreply.github.com>`는 김도림/Gamma 작업 PR merge 주체로 기록되어 있다.
+- 수정 파일: `WORK_TIMELINE.md`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`
+- 검증:
+  - `git log --all --date=iso-strict --format='%H%x09%ad%x09%an%x09%ae%x09%s'`
+  - `git show --name-status --format='%H%n%ad%n%an <%ae>%n%s' --date=iso-strict <commit...>`
+  - `git show -m --name-status --format='%H%n%ad%n%an <%ae>%n%s' --date=iso-strict <merge-commit...>`
+- 다음 작업: 새 문서 기준으로 남은 구현을 이어갈 때는 `Simulation` 지도 UI를 `MapOverlayService` 기반으로 낮추고, `ScenarioService` 저장/불러오기 UI를 붙이면서 shared `ScenarioContext` 계약을 유지한다.
+
+#### 2026-04-02 12:26~12:29 Gamma/김도림 Prediction 1주차 산출물
+- 작업자: `PC12185\yanyo <hss85212002@gmail.com>` 작성, `gimdorim <165128099+gjyfdsdjj@users.noreply.github.com>` PR #1 merge.
+- 작업: Prediction 페이지와 서비스의 1주차 mock 예측 흐름을 추가했다. 공통 예측 결과 스키마, feature vector 초안, PredictionService mock 생성 로직, Streamlit 예측 페이지를 묶어 `Prediction` 축을 처음 열 수 있게 했다.
+- 수정 파일: `.gitignore`, `pages/03_prediction.py`, `src/data/schemas.py`, `src/engine/forecast/feature_builder.py`, `src/services/prediction_service.py`
+- 유기적 동작:
+  - `pages/03_prediction.py`가 사용자의 부하 배율/노드 선택을 받아 `PredictionService.run_mock_prediction()`을 호출한다.
+  - `PredictionService`는 `src/data/schemas.py`의 `PredictionResult`, `HourlyLoadPrediction`, `RiskLine` 계약에 맞춰 결과를 반환한다.
+  - `feature_builder.py`는 이후 baseline/LSTM/GNN으로 확장될 예측 입력 피처 계약의 시작점이다.
+- 검증: Git 기록상 별도 실행 로그는 없으며, 이후 박차오름 통합 작업에서 `compileall`과 page bare-run 검증으로 흡수되었다.
+- 다음 작업: mock 예측을 실제 KPX 데이터와 baseline/LSTM 예측 경로로 치환한다.
+
+#### 2026-04-05 15:30~18:22 Alpha/김동근 Monitoring 1주차 산출물
+- 작업자: `ehdrms3535 <ehdrms3535@naver.com>` 작성, `ehdrms3535 <88962038+ehdrms3535@users.noreply.github.com>` PR #3 merge.
+- 작업: Monitoring 페이지, MonitoringService mock 결과, Monitoring 관련 공통 스키마를 추가했다. KPI, 선로 상태, 혼잡 요약, trend point를 화면에 표시하는 1주차 뼈대를 만들었다.
+- 수정 파일: `pages/01_monitoring.py`, `src/data/schemas.py`, `src/services/monitoring_service.py`
+- 유기적 동작:
+  - `pages/01_monitoring.py`가 사이드바 입력을 받고 `MonitoringService.run_mock_monitoring()` 결과를 렌더링한다.
+  - `MonitoringService`는 mock 선로 정의를 `LineStatus`, `CongestionSummary`, `MonitoringKpi`, `MonitoringResult`로 조립한다.
+  - `schemas.py`의 Monitoring 계약은 이후 Simulation counterfactual baseline과 MapOverlayService의 입력으로 재사용된다.
+- 검증: 이후 `docs/dev_log.md`와 2주차 DC Power Flow 작업에서 Monitoring mock/DC 결과 비교로 검증 흐름이 이어졌다.
+- 다음 작업: mock 선로 상태를 실제 DC Power Flow 계산 결과로 치환한다.
+
+#### 2026-04-06 00:03 Beta/권나현 Simulation UI 뼈대 및 지도 연동
+- 작업자: `Raychell123 <chu040312@gmail.com>`
+- 작업: `pages/02_simulation.py`에 Simulation 페이지 UI 뼈대와 실제 지도 연동 흐름을 만들었다. 후보지/버스 입력과 Folium 기반 지도 표시가 페이지 중심에 배치되었다.
+- 수정 파일: `pages/02_simulation.py`
+- 유기적 동작:
+  - 페이지가 Streamlit 입력 위젯으로 시작/종료 버스, 후보지, 부하 배율을 받는다.
+  - Folium 지도는 페이지 내부 좌표 테이블과 선로/후보지 데이터를 직접 사용한다.
+  - 이 시점에는 서비스 계층과 공통 overlay 계약이 충분히 분리되지 않아, 이후 `SimulationService`와 `MapOverlayService`로 낮춰야 할 페이지 직접 조립 코드가 남았다.
+- 검증: Git 기록상 별도 검증 로그는 없으며, 후속 Simulation 페이지 bare-run 검증에서 확인되었다.
+- 다음 작업: A* route 결과, 설치 전후 delta, 추천 점수와 지도 표시를 연결한다.
+
+#### 2026-04-08 01:42~01:43 Alpha/김동근 Monitoring 2주차 DC Power Flow 연결
+- 작업자: `ehdrms3535 <ehdrms3535@naver.com>` 작성, `ehdrms3535 <88962038+ehdrms3535@users.noreply.github.com>` 중복 커밋/merge 기록.
+- 작업: DC Power Flow 엔진과 혼잡 지표 계산 엔진을 구현하고 Monitoring 페이지/서비스에 연결했다. `docs/dev_log.md`에는 13버스/15선로 설계, 슬랙 버스, 리액턴스/용량, 검증 결과를 기록했다.
+- 수정 파일: `docs/dev_log.md`, `pages/01_monitoring.py`, `src/engine/powerflow/dc_power_flow.py`, `src/engine/powerflow/congestion_metrics.py`, `src/services/monitoring_service.py`
+- 유기적 동작:
+  - `pages/01_monitoring.py`의 데이터 소스 토글이 `MonitoringService.run_dc_power_flow()`를 호출한다.
+  - `MonitoringService`는 `dc_power_flow.build_default_buses()`, `build_default_line_inputs()`, `solve()`를 호출한다.
+  - `congestion_metrics.compute_line_statuses()`와 `compute_congestion_summary()`가 `DCFlowResult`를 UI용 `LineStatus`/`CongestionSummary`로 변환한다.
+  - 실패 시 `MonitoringService.run_mock_monitoring()`로 내려가 `FallbackInfo(mode="mock_data")`를 남기는 구조가 이후 서비스 통합 테스트의 기준이 되었다.
+- 검증: `docs/dev_log.md`에 load_scale=1.0 기준 L12 critical, L01/L04/L05/L06/L08 warning 등 수치 검증이 기록되어 있다.
+- 다음 작업: Simulation에서 설치 전 baseline과 counterfactual delta 계산에 Monitoring DC 결과를 재사용한다.
+
+#### 2026-04-10 22:51 Beta/권나현 A* 경로 시각화와 설치 전후 지표 연동
+- 작업자: `Raychell123 <chu040312@gmail.com>`
+- 작업: Simulation 페이지 지도에 A* 최적 경로, 선로 혼잡 범례, 설치 전후 비교 지표를 연결했다.
+- 수정 파일: `pages/02_simulation.py`
+- 유기적 동작:
+  - `SimulationService`가 반환하는 `selected_route.waypoints`를 Folium `PolyLine`과 `CircleMarker`로 렌더링한다.
+  - 페이지 내부에서 `dc_power_flow.solve()` 결과의 `line_flows`와 `build_default_line_inputs()`의 용량을 색상 함수에 넣어 기존 선로 혼잡도를 표시한다.
+  - `SimulationResult.deltas`를 Streamlit metric 카드로 렌더링해 설치 전후 비교를 보여준다.
+- 검증: 이후 `python -c "import runpy; runpy.run_path('pages/02_simulation.py')"` bare-run 검증에서 페이지 실행성이 확인되었다.
+- 다음 작업: 지도/표 직접 조립 코드를 서비스 결과와 공통 overlay 계약으로 정리한다.
+
+#### 2026-04-13 08:41~08:43 Gamma/김도림 Prediction 2주차 실제 데이터·LSTM 산출물
+- 작업자: `PC12185\yanyo <hss85212002@gmail.com>` 작성, `gimdorim <165128099+gjyfdsdjj@users.noreply.github.com>` PR #7 merge.
+- 작업: KPX 원본 부하 CSV, Open-Meteo 기반 날씨 캐시, LSTM 저장 모델과 scaler, public/weather data adapter, baseline forecaster, LSTM forecaster를 추가해 Prediction을 mock에서 실제 데이터 기반 예측 경로로 확장했다.
+- 수정 파일: `data/raw/sukub*.csv`, `data/weather/BUS_*.csv`, `models/lstm/model.keras`, `models/lstm/scalers.pkl`, `pages/03_prediction.py`, `requirements.txt`, `src/data/adapters/public_data_adapter.py`, `src/data/adapters/weather_adapter.py`, `src/engine/forecast/baseline_forecaster.py`, `src/engine/forecast/lstm_forecaster.py`, `src/services/prediction_service.py`
+- 유기적 동작:
+  - `public_data_adapter.load_kpx_csvs()`가 `data/raw/sukub*.csv`를 읽어 전국 수요를 13개 `BUS_*` 노드 부하로 분배한다.
+  - `weather_adapter.fetch_historical()`가 `data/weather/BUS_*.csv` 캐시를 사용하거나 Open-Meteo에서 기온을 가져온다.
+  - `load_kpx_with_weather()`가 부하와 기온을 `timestamp`, `bus_id` 기준으로 병합한다.
+  - `PredictionService.run_baseline_prediction()`은 `BaselineForecaster.fit().predict()`를 사용하고, `run_lstm_prediction()`은 `LSTMForecaster`와 `models/lstm` 산출물을 사용한다.
+  - `pages/03_prediction.py`는 Mock/Baseline/LSTM 선택지를 화면에 연결하고, 실패 시 mock 또는 baseline fallback을 표시한다.
+- 검증: 이후 통합 작업에서 baseline/LSTM 예측 결과 `preds=312`와 `fallback='none'` 검증으로 이어졌다.
+- 다음 작업: 예측 위험도 표시, 설명 문구, 시나리오 비교 UI를 보강한다.
+
+#### 2026-05-04 18:24~18:25 Gamma/김도림 Prediction 3주차 UI·위험도·비교 보강
+- 작업자: `PC12185\yanyo <hss85212002@gmail.com>` 작성, `gimdorim <165128099+gjyfdsdjj@users.noreply.github.com>` PR #9 merge.
+- 작업: Prediction 페이지에 위험도 표시, 설명 문구, 시나리오 A/B 비교 그래프, 테스트 작성 시작 범위를 추가했다. 최신 부하/날씨 데이터도 보강했다.
+- 수정 파일: `data/raw/sukub (5).csv`, `data/weather/BUS_*.csv`, `pages/03_prediction.py`, `src/services/prediction_service.py`
+- 유기적 동작:
+  - `PredictionService._compute_risk_lines()`가 예측값을 선로별 이용률 근사치로 변환하고 `RiskLine.explanation`을 만든다.
+  - `pages/03_prediction.py`는 `PredictionResult.risk_lines`를 위험 카드, xAI expander, 위험 시각 vertical line으로 시각화한다.
+  - session state의 `pred_scenario_a`와 현재 `pred_result`를 비교해 총부하 비교 그래프와 위험 선로 비교표를 구성한다.
+- 검증: 이후 Gamma 테스트 보강과 서비스 통합 테스트에서 위험 선로 정렬, non-low filtering, 설명 출력이 검증되었다.
+- 다음 작업: Prediction 예측 품질과 테스트 범위를 명시적으로 고정한다.
+
+#### 2026-05-08 15:21~15:32 Alpha/김동근 Monitoring 안정화와 호환성 보정
+- 작업자: `ehdrms3535 <ehdrms3535@naver.com>`, `ehdrms3535 <88962038+ehdrms3535@users.noreply.github.com>`
+- 작업: 3주차 DC Power Flow 관련 호환성 보정, `settings.py`, A*/score dataclass 호환 조정, Monitoring 페이지 deprecated 코드와 미사용 변수 제거를 수행했다.
+- 수정 파일: `pages/01_monitoring.py`, `src/config/settings.py`, `src/engine/search/astar_router.py`, `src/engine/search/score_function.py`
+- 유기적 동작:
+  - `pages/01_monitoring.py`는 Streamlit 최신 API 경고를 줄이고, MonitoringService 반환 dataclass를 더 직접적으로 렌더링한다.
+  - `settings.py` 조정은 환경 변수 기반 설정 로딩과 이후 VWorld/API key 연결의 기반이 된다.
+  - `astar_router.py`, `score_function.py`의 호환성 수정은 SimulationService가 route/score dataclass를 안정적으로 조립하도록 돕는다.
+- 검증: 이후 전체 `compileall`과 Simulation/Monitoring bare-run 검증에서 회귀 없이 통과했다.
+- 다음 작업: 페이지별 deprecated API를 계속 줄이고, 실제 테스트에서 Streamlit 경고를 분리한다.
+
+#### 2026-05-10~05-11 Beta/권나현 Simulation 실행 버튼·AI 연결·충돌 해결
+- 작업자: `Raychell123 <chu040312@gmail.com>`, `Raychell123 <165642963+Raychell123@users.noreply.github.com>`
+- 작업: Simulation 페이지에 명시적 실행 버튼/form 흐름을 추가하고, AI 최적 경로 및 혼잡도 계산을 버튼 클릭 시에만 수행하도록 정리했다. 이후 main 병합 충돌을 해결하고 PR #13으로 병합했다.
+- 수정 파일: `pages/02_simulation.py`
+- 유기적 동작:
+  - `st.form("simulation_form")`과 `form_submit_button()`이 Streamlit rerun마다 무거운 계산을 반복하지 않도록 실행 경계를 만든다.
+  - 버튼 클릭 시 페이지는 `build_default_buses()`, `build_default_line_inputs()`, `solve()`로 지도용 기존 선로 흐름을 만들고, 동시에 `SimulationService.build_default_input()`과 `run_simulation()`으로 A*/score/delta 결과를 만든다.
+  - 결과는 `st.session_state.sim_result`, `pf_result`, `lines`, `sgop_shared_scenario`에 저장되어 rerun 후에도 화면 렌더링에 재사용된다.
+  - 이 구조는 동작은 직관적이지만, 현재도 페이지가 DC Power Flow와 Folium 지도 데이터를 직접 조립하므로 `MapOverlayService` 통합 대상이다.
+- 검증: 이후 `pages/02_simulation.py` bare-run, `SimulationService.run_simulation()` smoke 검증, 후보지 미선택 기본 후보 처리 검증으로 이어졌다.
+- 다음 작업: `ScenarioService` 저장 UI와 `MapOverlayService` 기반 지도 레이어를 붙인다.
+
+#### 2026-05-14 13:34~14:01 Gamma/김도림 Prediction 성능 품질 개선 및 LSTM 시드 고정
+- 작업자: `PC12185\yanyo <hss85212002@gmail.com>` 작성, `gimdorim <165128099+gjyfdsdjj@users.noreply.github.com>` PR #15/#16 merge.
+- 작업: 최신 `sukub (6).csv`와 날씨 캐시를 추가/갱신하고, LSTM 모델 산출물과 forecaster를 성능 품질 관점에서 보정했다. 이어서 LSTM 학습/추론 재현성을 위해 seed 고정 코드를 추가했다.
+- 수정 파일: `data/raw/sukub (6).csv`, `data/weather/BUS_*.csv`, `models/lstm/model.keras`, `models/lstm/scalers.pkl`, `src/engine/forecast/lstm_forecaster.py`
+- 유기적 동작:
+  - `data/raw`와 `data/weather`는 `PredictionService._load_weather_history()`가 읽는 실제 예측 입력 범위를 확장한다.
+  - `models/lstm/model.keras`와 `models/lstm/scalers.pkl`은 `LSTMForecaster.is_trained()`와 `_load_if_needed()`가 사용하는 저장 모델 경로다.
+  - `LSTMForecaster.fit()`의 seed 고정은 TensorFlow/NumPy/random 기반 학습 재현성을 높이고, model quality 테스트의 변동성을 줄인다.
+- 검증: 이후 `run_lstm_prediction()`과 `run_hybrid_prediction()` 검증에서 저장 모델 로드/재학습 fallback 흐름이 확인되었다.
+- 다음 작업: LSTM 모델 로드/재학습은 `slow` 또는 `integration` 테스트로 분리해 빠른 pytest와 분리한다.
+
+#### 2026-05-15 22:15~22:17 Gamma/김도림 예측 모델 품질 테스트 추가
+- 작업자: `PC12185\yanyo <hss85212002@gmail.com>` 작성, `gimdorim <165128099+gjyfdsdjj@users.noreply.github.com>` PR #17 merge.
+- 작업: 예측 모델 품질 검증 테스트를 추가했다. 예측 개수, 음수 부하 금지, confidence interval 순서, 13개 버스 커버리지, 위험 선로 정렬, 피크 시각 합리성, 부하 배율 효과, 도시 규모 순서를 검증한다.
+- 수정 파일: `tests/test_model_quality.py`
+- 유기적 동작:
+  - `tests/test_model_quality.py`는 `PredictionService.run_mock_prediction()`과 `run_baseline_prediction(raw_dir=data/raw)`를 직접 호출한다.
+  - 테스트는 `PredictionResult.predictions`, `risk_lines`, `load_scale`, bus별 평균 예측값을 검증해 `pages/03_prediction.py`가 렌더링하는 핵심 데이터의 품질 하한선을 만든다.
+  - 이 테스트는 repository data를 직접 읽는 성격이 있어 빠른 단위 테스트와 통합 테스트 경계 관리가 필요하다.
+- 검증: Git 기록상 추가 커밋만 확인했으며, 이후 전체 테스트 기록은 `WORK_TIMELINE.md`의 43개 통과 항목과 연결된다.
+- 다음 작업: 테스트 marker를 적용해 실제 데이터 기반 품질 테스트와 빠른 synthetic 테스트를 명확히 분리한다.
+
+### 2026-05-17 작업 시작 전 코드 흐름 문서 필수 확인 규칙 추가
+- 작업: 작업 시작 전 필수 확인 규칙에 `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`를 추가했다. 이제 `AGENTS.md`를 읽은 뒤 `WORK_TIMELINE.md`뿐 아니라 작업자별 코드 흐름 문서도 반드시 읽어야 한다. `반드시 먼저 읽을 파일` 목록에도 같은 문서를 4번으로 넣고, 작업 타임라인 규칙에도 `WORK_TIMELINE.md` 확인 후 해당 문서를 읽어 작업자별 책임 범위와 현재 코드 연결 구조를 확인하도록 명시했다.
+- 수정 파일: `AGENTS.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `rg -n "WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17|반드시 먼저 읽을 파일|작업 타임라인 규칙" AGENTS.md`
+  - `git diff --check -- AGENTS.md WORK_TIMELINE.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`
+- 다음 작업: 다음 구현 작업부터는 시작 시 `AGENTS.md -> WORK_TIMELINE.md -> docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md` 순서로 읽고, 남은 구조 정리 우선순위는 새 문서의 `현재 구조상 남은 결합 지점`을 함께 참고한다.

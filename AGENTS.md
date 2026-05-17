@@ -7,30 +7,31 @@
 
 ## 작업 시작 전 필수 확인
 - 먼저 `git status --short`를 확인한다.
-- `AGENTS.md`를 읽었으면 이어서 루트의 `WORK_TIMELINE.md`도 반드시 읽는다.
+- `AGENTS.md`를 읽었으면 이어서 루트의 `WORK_TIMELINE.md`와 `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`도 반드시 읽는다.
 - `지도`, `VWorld`, `랜딩 페이지`, `지도 어댑터`, `좌표`, `2.5D/3D` 관련 작업을 시작할 때는 이 문서의 `랜딩 페이지 지도 UI 필수 요구사항`, `지도 구현 권장 구조`, `지도 구현 중요 포인트`를 다시 읽고 시작한다.
 - 현재 워크트리는 더럽혀져 있을 수 있다. 내가 만들지 않은 변경은 되돌리지 않는다.
 - `Monitoring`, `Simulation` 서비스에는 mock 반환 뼈대가 들어가 있지만, 페이지와 엔진 연결은 아직 대부분 스텁이다.
 - 현재 구현 기준점은 `Prediction` 쪽이다. 새 기능은 이 흐름을 참고하되, 페이지별 하드코딩을 늘리지 않는다.
 - 외부 API, 실제 데이터, 모델 파일이 없어도 mock 기준으로 동작해야 한다.
-- 작업을 시작할 때는 `WORK_TIMELINE.md`의 최신 항목을 확인하고, 작업이 끝나면 같은 파일에 결과와 검증 내용을 추가한다.
+- 작업을 시작할 때는 `WORK_TIMELINE.md`의 최신 항목과 `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`의 작업자별 코드 흐름을 확인하고, 작업이 끝나면 `WORK_TIMELINE.md`에 결과와 검증 내용을 추가한다.
 
 ## 반드시 먼저 읽을 파일
 1. `meeting_plan/MEETING_PLAN_2026-03-30.md`
 2. `DEVELOPMENT_FLOW_2026-03-30.md`
 3. `WORK_TIMELINE.md`
-4. `src/data/schemas.py`
-5. `app.py`
-6. `pages/03_prediction.py`
-7. `src/services/prediction_service.py`
-8. `pages/01_monitoring.py`
-9. `pages/02_simulation.py`
-10. `src/services/monitoring_service.py`
-11. `src/services/simulation_service.py`
-12. `src/engine/search/astar_router.py`
-13. `src/engine/search/score_function.py`
-14. `src/engine/forecast/feature_builder.py`
-15. `src/config/settings.py`
+4. `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`
+5. `src/data/schemas.py`
+6. `app.py`
+7. `pages/03_prediction.py`
+8. `src/services/prediction_service.py`
+9. `pages/01_monitoring.py`
+10. `pages/02_simulation.py`
+11. `src/services/monitoring_service.py`
+12. `src/services/simulation_service.py`
+13. `src/engine/search/astar_router.py`
+14. `src/engine/search/score_function.py`
+15. `src/engine/forecast/feature_builder.py`
+16. `src/config/settings.py`
 
 ## 현재 저장소 상태
 - `pages/03_prediction.py`와 `src/services/prediction_service.py`는 공통 시나리오와 fallback 메타데이터를 포함한 목업 수준 구현이 있다.
@@ -207,6 +208,7 @@
 ## 작업 타임라인 규칙
 - 작업 타임라인 기준 파일은 루트의 `WORK_TIMELINE.md`다.
 - 새 작업을 시작할 때는 가장 최근 항목을 먼저 읽고 현재 우선순위와 마지막 변경 지점을 확인한다.
+- `WORK_TIMELINE.md`를 읽은 뒤에는 `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`도 반드시 읽고, 작업자별 책임 범위와 현재 코드 연결 구조를 확인한다.
 - 작업 중 의미 있는 변경이 끝나면 `날짜`, `작업 요약`, `수정 파일`, `검증`, `다음 작업`을 한 항목으로 추가한다.
 - `AGENTS.md`의 현재 상태와 `WORK_TIMELINE.md`의 최신 항목이 충돌하면 더 최근 날짜의 `WORK_TIMELINE.md`를 우선 참고하고, 필요하면 `AGENTS.md`도 함께 갱신한다.
 
