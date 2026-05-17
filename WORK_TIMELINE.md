@@ -826,3 +826,32 @@
   - `.venv/bin/streamlit run app.py --server.port 8502 --server.address 127.0.0.1 --server.headless true` -> 8501 충돌로 8502에서 서버 기동, `curl -I http://127.0.0.1:8502` HTTP 200 확인
   - `.venv/bin/streamlit run app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true` -> 8501 재기동 후 `curl -I http://127.0.0.1:8501` HTTP 200 확인
 - 다음 작업: LSTM 모델 로드/재학습 테스트를 `slow` marker로 분리하거나, domain 스텁을 실제 계약/fixture 중심으로 정리한다.
+
+### 2026-05-17 9번 테스트/검증 체계 고정 완료
+- 작업: 1~8번에서 만든 공통 계약, 지도 overlay, ScenarioService, Prediction fallback 흐름이 계속 깨지지 않도록 검증 체계를 고정했다. `tests/test_streamlit_import_safe.py`를 추가해 `app.py`, Monitoring, Simulation, Prediction 페이지를 별도 subprocess bare-run으로 확인한다. `tests/test_prediction_lstm_slow.py`를 추가해 실제 LSTM 저장 모델 로드/재학습 smoke test를 `integration` + `slow` marker 대상으로 분리했고, 기본 실행에서는 skip되며 `SGOP_RUN_SLOW_LSTM=1`을 명시했을 때만 실제 TensorFlow/LSTM 경로를 돌리게 했다. `README.md`에는 Python/Streamlit 실행 방식, compileall, 빠른 테스트, 전체 테스트, integration/slow marker, Streamlit bare-run warning 기준, fallback 정책을 정리했다.
+- 작업 전 기준선:
+  - `git status --short` 기준 대량 modified 파일이 이미 존재한다. 이번 작업은 테스트/검증 체계 파일과 문서만 건드렸고, 기존 unrelated dirty 파일은 되돌리지 않았다.
+  - Python: `.venv/bin/python` -> `Python 3.10.12`
+  - Streamlit: `1.57.0`
+  - pytest: `9.0.3`
+  - folium: `0.20.0`
+  - streamlit-folium: `0.26.2`
+  - TensorFlow: `2.21.0`, Keras: `3.12.2`
+- 수정 파일: `tests/test_streamlit_import_safe.py`, `tests/test_prediction_lstm_slow.py`, `README.md`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 빠른 기본 검증은 `pytest -m "not integration and not slow"`로 raw data/model/TensorFlow slow 경로를 제외한다.
+  - `tests/test_model_quality.py`는 repository raw data를 읽으므로 `integration` 대상으로 유지한다.
+  - `tests/test_prediction_lstm_slow.py`는 `SGOP_RUN_SLOW_LSTM=1` 없이는 skip되어 일반 검증에서 저장 모델을 덮어쓰지 않는다.
+  - Streamlit bare-run의 `missing ScriptRunContext` warning은 정상 warning으로 보고, subprocess return code와 success marker 출력으로 실패 여부를 판단한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_streamlit_import_safe.py tests/test_prediction_lstm_slow.py -q` -> 4개 통과, 1개 skipped
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_vworld_adapter.py tests/test_map_overlay_contract.py tests/test_service_integration_contract.py tests/test_scenario_service.py tests/test_simulation_route_score.py -q` -> 42개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 85개 통과, 14개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m slow -q` -> 1개 skipped, 98개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m integration -q` -> 13개 통과, 1개 skipped, 85개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -q` -> 98개 통과, 1개 skipped
+  - `git diff --check -- tests/test_streamlit_import_safe.py tests/test_prediction_lstm_slow.py README.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
+  - `.venv/bin/streamlit run app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true` -> 서버 기동
+  - `curl -I http://127.0.0.1:8501` -> HTTP 200 확인
+- 다음 작업: 10번 문서/타임라인 정리에서 README와 docs의 실행 방법, env/secrets, 테스트 marker, fallback 정책을 최종 형태로 더 다듬거나, domain 스텁을 실제 계약/fixture 중심으로 정리한다.

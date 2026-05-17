@@ -330,13 +330,21 @@ app.py
 - overlay metadata는 `rendering_mode`, `vworld_available`, `coordinate_system="EPSG:4326"`, `elevation_source="not_queried"`, `source_fallback_mode`, point/line/route count를 공통으로 남긴다.
 - VWorld API key와 tile URL은 warning, fallback reason, fallback 표, overlay metadata에 노출하지 않는다.
 
+## 2026-05-17 테스트/검증 체계 고정
+- `pytest.ini`의 `integration`, `slow` marker를 검증 구분 기준으로 사용한다.
+- 빠른 기본 검증은 `pytest -m "not integration and not slow"`로 수행해 repository raw data, 저장 모델, TensorFlow/LSTM 경로를 제외한다.
+- `tests/test_model_quality.py`는 repository `data/raw`를 읽는 예측 품질 테스트이므로 `integration` 대상으로 유지한다.
+- `tests/test_prediction_lstm_slow.py`는 실제 LSTM 저장 모델 로드 또는 재학습 smoke test이며 `integration`과 `slow`를 동시에 가진다. 기본 실행에서는 skip되고, `SGOP_RUN_SLOW_LSTM=1`을 명시했을 때만 실제 LSTM 경로를 돌린다.
+- `tests/test_streamlit_import_safe.py`는 `app.py`, Monitoring, Simulation, Prediction 페이지를 별도 Python subprocess에서 bare-run해 import-safe 상태를 고정한다.
+- Streamlit bare-run의 `missing ScriptRunContext` warning은 정상 warning으로 보고, subprocess return code와 success marker 출력으로 실패 여부를 판단한다.
+
 ## 현재 남은 구조적 갭
 - `app.py`, Monitoring, Simulation, Prediction은 모두 공통 overlay 렌더러를 사용하지만, 실제 지도 클릭과 브라우저 렌더링은 Streamlit 런타임에서 추가 수동 검증이 필요하다.
 - `MapOverlayService`는 app/Monitoring/Simulation/Prediction overlay 계약을 만들지만, 실제 VWorld 호출 품질과 고도 조회는 아직 붙어 있지 않다.
 - `src/domain`, `src/utils`, `src/engine/explain`, `src/engine/optimize`, `src/engine/recommend`는 대부분 한 줄 스텁이다.
-- LSTM 모델 로드/재학습 검증은 아직 `slow` marker 대상으로 별도 분리할 수 있다.
+- LSTM 모델 로드/재학습 검증은 `slow` marker로 분리되었지만, 실제 실행은 `SGOP_RUN_SLOW_LSTM=1`을 명시해야 한다.
 
 ## 다음 구현 권장 순서
-1. LSTM 모델 로드/재학습 테스트를 `slow` marker로 분리한다.
-2. domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하되, 먼저 `schemas.py`와 중복되는 책임 경계를 정한다.
-3. ScenarioService가 현재는 `ScenarioContext`만 저장하므로, 설치 지점과 페이지 입력값까지 시나리오 저장 대상에 포함할지 후속 계약을 정한다.
+1. domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하되, 먼저 `schemas.py`와 중복되는 책임 경계를 정한다.
+2. ScenarioService가 현재는 `ScenarioContext`만 저장하므로, 설치 지점과 페이지 입력값까지 시나리오 저장 대상에 포함할지 후속 계약을 정한다.
+3. 실제 VWorld 고도 조회를 붙이기 전 elevation_source, 조회 시각, fallback 여부를 service metadata로 확장한다.
