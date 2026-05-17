@@ -1,13 +1,22 @@
 from __future__ import annotations
 from datetime import datetime
+from typing import Any
 
 import pandas as pd
 import streamlit as st
-import folium
-from streamlit_folium import st_folium
 
-from src.data.schemas import ScenarioContext, ScoreBreakdown, SimulationResult
-from src.engine.powerflow.dc_power_flow import solve, build_default_buses, build_default_line_inputs
+from src.data.adapters.vworld_adapter import MapCapability, get_map_capability
+from src.data.schemas import (
+    MapOverlayLine,
+    MapOverlayPoint,
+    MapOverlayResult,
+    MapOverlayRoute,
+    ScenarioContext,
+    ScoreBreakdown,
+    SimulationResult,
+)
+from src.services.map_overlay_service import MapOverlayService
+from src.services.monitoring_service import MonitoringService
 from src.services.simulation_service import SimulationService
 
 st.set_page_config(page_title="시뮬레이션 | SGOP", layout="wide")
@@ -18,6 +27,8 @@ def get_service():
     return SimulationService()
 
 sim_service = get_service()
+overlay_service = MapOverlayService()
+monitoring_service = MonitoringService()
 
 def _get_shared_scenario() -> ScenarioContext:
     scenario = st.session_state.get("sgop_shared_scenario")
@@ -39,12 +50,13 @@ def _get_shared_scenario() -> ScenarioContext:
 bus_options = sim_service.list_bus_options()
 candidate_options = sim_service.list_candidate_options()
 
-def get_congestion_color(flow_mw, capacity_mw):
-    if capacity_mw <= 0: return "#9ca3af"
-    congestion = (abs(flow_mw) / capacity_mw) * 100
-    if congestion >= 80: return "#ef4444"  # 빨강
-    elif congestion >= 50: return "#eab308" # 노랑
-    else: return "#22c55e" # 초록
+def get_congestion_color(status: str):
+    return {
+        "normal": "#22c55e",
+        "warning": "#eab308",
+        "critical": "#ef4444",
+        "overload": "#8b5cf6",
+    }.get(status, "#9ca3af")
 
 # --- 세션 상태(Session State) 초기화 ---
 if 'sim_run' not in st.session_state:
@@ -138,6 +150,150 @@ def _format_route_nodes(sim_result: SimulationResult) -> str:
         return "-"
     return " -> ".join(route.path_node_ids)
 
+def _build_map_overlay(
+    sim_result: SimulationResult,
+    *,
+    map_capability: MapCapability,
+) -> MapOverlayResult:
+    baseline_monitoring = monitoring_service.run_dc_power_flow(
+        scenario=sim_result.scenario,
+        load_scale=sim_result.simulation_input.load_scale,
+        created_at=sim_result.created_at,
+    )
+    return overlay_service.build_simulation_overlay(
+        sim_result,
+        baseline_monitoring=baseline_monitoring,
+        map_capability=map_capability,
+    )
+
+def _load_map_libraries() -> tuple[Any | None, Any | None, str | None]:
+    try:
+        import folium
+        from streamlit_folium import st_folium
+
+        return folium, st_folium, None
+    except Exception as exc:  # noqa: BLE001
+        return None, None, str(exc)
+
+def _render_overlay_map(
+    overlay: MapOverlayResult,
+    *,
+    map_capability: MapCapability,
+) -> None:
+    folium, st_folium, import_error = _load_map_libraries()
+    if import_error is not None:
+        st.warning(f"지도 라이브러리 fallback: {import_error}")
+        _render_overlay_fallback_tables(overlay)
+        return
+
+    m = folium.Map(location=[36.5, 127.5], zoom_start=7, tiles=None, control_scale=True)
+    if map_capability.wmts_tile_url:
+        folium.TileLayer(
+            tiles=map_capability.wmts_tile_url,
+            attr="공간정보 오픈플랫폼(브이월드)",
+            name="VWorld 2.5D",
+            overlay=False,
+            control=True,
+        ).add_to(m)
+    else:
+        folium.TileLayer(
+            tiles="CartoDB positron",
+            name="Fallback 2D",
+            overlay=False,
+            control=True,
+        ).add_to(m)
+
+    for line in overlay.lines:
+        _add_overlay_line(folium, m, line)
+    for route in overlay.routes:
+        _add_overlay_route(folium, m, route)
+    for point in overlay.points:
+        _add_overlay_point(folium, m, point)
+
+    folium.LayerControl(collapsed=True).add_to(m)
+    st_folium(m, width=1200, height=650, returned_objects=[])
+
+def _add_overlay_line(folium: Any, folium_map: Any, line: MapOverlayLine) -> None:
+    folium.PolyLine(
+        locations=[
+            [line.from_point.latitude, line.from_point.longitude],
+            [line.to_point.latitude, line.to_point.longitude],
+        ],
+        color=get_congestion_color(line.status),
+        weight=4,
+        opacity=0.55,
+        tooltip=f"{line.label} | {line.status}",
+    ).add_to(folium_map)
+
+def _add_overlay_route(folium: Any, folium_map: Any, route: MapOverlayRoute) -> None:
+    route_coords = [[point.latitude, point.longitude] for point in route.points]
+    if len(route_coords) < 2:
+        return
+
+    folium.PolyLine(
+        locations=route_coords,
+        color="#2563eb" if route.rank == 1 else "#64748b",
+        weight=5 if route.rank == 1 else 3,
+        dash_array="10" if route.rank == 1 else None,
+        tooltip=route.label,
+        opacity=0.9 if route.rank == 1 else 0.45,
+    ).add_to(folium_map)
+
+def _add_overlay_point(folium: Any, folium_map: Any, point: MapOverlayPoint) -> None:
+    style = _point_style(point)
+    folium.CircleMarker(
+        location=[point.latitude, point.longitude],
+        radius=style["radius"],
+        popup=_point_popup_html(point),
+        tooltip=point.label,
+        color=style["color"],
+        fill=True,
+        fill_color=style["fill_color"],
+        fill_opacity=style["fill_opacity"],
+        weight=style["weight"],
+    ).add_to(folium_map)
+
+def _point_style(point: MapOverlayPoint) -> dict[str, Any]:
+    if point.status == "selected":
+        return {"color": "#7c3aed", "fill_color": "#a78bfa", "fill_opacity": 0.95, "radius": 9, "weight": 3}
+    if point.kind == "tower_candidate":
+        return {"color": "#047857", "fill_color": "#34d399", "fill_opacity": 0.9, "radius": 7, "weight": 2}
+    if point.kind == "route_point":
+        return {"color": "#2563eb", "fill_color": "#ffffff", "fill_opacity": 1.0, "radius": 5, "weight": 2}
+    return {"color": "#334155", "fill_color": "#cbd5e1", "fill_opacity": 0.85, "radius": 5, "weight": 2}
+
+def _point_popup_html(point: MapOverlayPoint) -> str:
+    return (
+        f"<strong>{point.label}</strong><br>"
+        f"x: {point.longitude:.6f}<br>"
+        f"y: {point.latitude:.6f}<br>"
+        f"kind: {point.kind}"
+    )
+
+def _render_overlay_fallback_tables(overlay: MapOverlayResult) -> None:
+    line_rows = [
+        {
+            "선로 ID": line.metadata.get("line_id", line.overlay_id),
+            "구간": line.label,
+            "상태": line.status,
+            "이용률 (%)": round(float(line.metadata.get("utilization", 0.0)) * 100, 1),
+        }
+        for line in overlay.lines
+    ]
+    route_rows = [
+        {
+            "순위": route.rank,
+            "후보지": route.metadata.get("candidate_label", route.candidate_id),
+            "경로 길이 (km)": round(route.total_distance_km, 1),
+            "예상 비용": round(route.estimated_cost, 1),
+        }
+        for route in overlay.routes
+    ]
+    if line_rows:
+        st.dataframe(pd.DataFrame(line_rows), use_container_width=True, hide_index=True)
+    if route_rows:
+        st.dataframe(pd.DataFrame(route_rows), use_container_width=True, hide_index=True)
+
 # --- 2. 사이드바 입력창 (Form으로 묶어서 한 번에 실행!) ---
 with st.sidebar:
     st.header("⚡ 시뮬레이션 제어")
@@ -162,10 +318,6 @@ st.title("🗺️ 송전망 혼잡도 및 A* 최적 경로 시뮬레이션")
 # --- 3. 엔진 가동 (버튼을 눌렀을 때만 작동) ---
 if submitted:
     with st.spinner("AI가 최적 경로 및 혼잡도를 계산 중입니다... 🔄"):
-        buses = build_default_buses(load_scale=load_scale)
-        lines = build_default_line_inputs()
-        st.session_state.pf_result = solve(buses, lines)
-
         shared_scenario = _get_shared_scenario()
         shared_created_at = shared_scenario.created_at
 
@@ -181,18 +333,31 @@ if submitted:
             sim_input,
             created_at=shared_created_at,
         )
+        map_capability = get_map_capability(prefer_webgl=False)
+        map_overlay = _build_map_overlay(
+            sim_result,
+            map_capability=map_capability,
+        )
         
         st.session_state.sim_result = sim_result
-        st.session_state.lines = lines 
+        st.session_state.sim_map_capability = map_capability
+        st.session_state.sim_map_overlay = map_overlay
         st.session_state.sgop_shared_scenario = sim_result.scenario
         st.session_state.selected_candidates = selected_candidates
         st.session_state.sim_run = True
 
 # --- 4. 화면 레이아웃 (계산 완료 상태일 때만 화면 렌더링) ---
 if st.session_state.sim_run:
-    pf_result = st.session_state.pf_result
     sim_result = st.session_state.sim_result
-    lines = st.session_state.lines
+    map_capability = st.session_state.get("sim_map_capability") or get_map_capability(prefer_webgl=False)
+    map_overlay = st.session_state.get("sim_map_overlay")
+    if not isinstance(map_overlay, MapOverlayResult):
+        map_overlay = _build_map_overlay(
+            sim_result,
+            map_capability=map_capability,
+        )
+        st.session_state.sim_map_capability = map_capability
+        st.session_state.sim_map_overlay = map_overlay
     selected_candidates = st.session_state.selected_candidates
 
     # 팀원들이 추가한 안내 메시지 및 시나리오 캡션
@@ -218,67 +383,11 @@ if st.session_state.sim_run:
 
     with col_map:
         st.subheader("📍 A* 최적 경로 및 계통 혼잡 지도")
-        m = folium.Map(location=[36.5, 127.5], zoom_start=7, tiles='CartoDB positron')
-        
-        bus_coords = {
-            "BUS_001": [37.5665, 126.9780], "BUS_002": [37.4563, 126.7052], 
-            "BUS_003": [37.2636, 127.0286], "BUS_004": [37.8813, 127.7298],
-            "BUS_005": [37.7519, 128.8761], "BUS_006": [37.3422, 127.9202],
-            "BUS_007": [36.3504, 127.3845], "BUS_008": [36.6424, 127.4890],
-            "BUS_009": [35.1595, 126.8526], "BUS_010": [35.8242, 127.1480],
-            "BUS_011": [35.8714, 128.6014], "BUS_012": [35.5384, 129.3114],
-            "BUS_013": [35.1796, 129.0756]
-        }
-
-        for line in lines:
-            f_num = line.from_bus.replace('B', '')
-            t_num = line.to_bus.replace('B', '')
-            f_bus = f"BUS_{f_num.zfill(3)}"
-            t_bus = f"BUS_{t_num.zfill(3)}"
-            
-            if f_bus in bus_coords and t_bus in bus_coords:
-                current_flow = pf_result.line_flows.get(line.line_id, 0)
-                folium.PolyLine(
-                    locations=[bus_coords[f_bus], bus_coords[t_bus]],
-                    color=get_congestion_color(current_flow, line.capacity_mw),
-                    weight=4, opacity=0.4
-                ).add_to(m)
-
-        if sim_result.selected_route and sim_result.selected_route.waypoints:
-            route_coords = [[wp.latitude, wp.longitude] for wp in sim_result.selected_route.waypoints]
-            
-            folium.PolyLine(
-                locations=route_coords,
-                color="#2563eb",
-                weight=5,
-                dash_array="10",
-                tooltip="추천 A* 신규 송전 경로",
-                opacity=0.9
-            ).add_to(m)
-            
-            for wp in sim_result.selected_route.waypoints:
-                folium.CircleMarker(
-                    location=[wp.latitude, wp.longitude],
-                    radius=6, popup=wp.label, tooltip=wp.label,
-                    color="#2563eb", fill=True, fill_color="#ffffff", fill_opacity=1.0
-                ).add_to(m)
-
-        legend_html = '''
-        <div style="position: fixed; 
-             bottom: 30px; left: 30px; width: 170px; height: 135px; 
-             background-color: rgba(255, 255, 255, 0.95); z-index:9999; font-size:13px;
-             border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px;
-             box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
-             <div style="font-weight: bold; margin-bottom: 5px;">🚥 선로 상태 범례</div>
-             <div style="margin-bottom: 2px;"><span style="color:#22c55e; font-size:16px;">■</span> 원활 (50% 미만)</div>
-             <div style="margin-bottom: 2px;"><span style="color:#eab308; font-size:16px;">■</span> 주의 (50~80%)</div>
-             <div style="margin-bottom: 2px;"><span style="color:#ef4444; font-size:16px;">■</span> 혼잡 (80% 이상)</div>
-             <div><span style="color:#2563eb; font-weight:bold; font-size:16px;">╍</span> 신규 A* 경로</div>
-        </div>
-        '''
-        m.get_root().html.add_child(folium.Element(legend_html))
-
-        st_folium(m, width="100%", height=650, returned_objects=[])
+        _render_overlay_map(
+            map_overlay,
+            map_capability=map_capability,
+        )
+        st.caption(map_overlay.summary)
 
     with col_info:
         # --- 설치 전/후 비교 카드 ---

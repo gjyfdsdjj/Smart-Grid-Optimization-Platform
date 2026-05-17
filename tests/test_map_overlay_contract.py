@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from src.data.adapters.vworld_adapter import get_map_capability
-from src.data.schemas import ScenarioContext
+from src.data.schemas import InstallationPoint, MapOverlayPoint, ScenarioContext
 from src.services.map_overlay_service import MapOverlayService
 from src.services.monitoring_service import MonitoringService
 from src.services.prediction_service import PredictionService
@@ -22,6 +22,65 @@ def _scenario() -> ScenarioContext:
 
 def _map_2_5d_capability():
     return get_map_capability(api_key="", use_settings=False)
+
+
+def test_installation_point_contract_preserves_xy_and_2_5d_defaults():
+    installation = InstallationPoint(
+        installation_id="install-001",
+        label="신규 발전소",
+        kind="power_plant",
+        latitude=37.123456,
+        longitude=127.654321,
+        capacity_mw=500.0,
+    )
+    overlay_point = MapOverlayPoint(
+        overlay_id=f"installation:{installation.installation_id}",
+        label=installation.label,
+        kind=installation.kind,
+        latitude=installation.latitude,
+        longitude=installation.longitude,
+        elevation_m=installation.elevation_m,
+        coordinate_system=installation.coordinate_system,
+        elevation_source=installation.elevation_source,
+        status="selected",
+        source="manual",
+    )
+
+    assert installation.mode == "new"
+    assert installation.elevation_m is None
+    assert installation.elevation_source == "not_queried"
+    assert installation.coordinate_system == "EPSG:4326"
+    assert overlay_point.kind == "power_plant"
+    assert overlay_point.source == "manual"
+    assert overlay_point.longitude == 127.654321
+    assert overlay_point.latitude == 37.123456
+
+
+def test_installation_target_kinds_are_supported_by_overlay_point_contract():
+    supported_kinds = [
+        "power_plant",
+        "transmission_tower",
+        "start_point",
+        "end_point",
+        "install_point",
+    ]
+
+    for kind in supported_kinds:
+        point = MapOverlayPoint(
+            overlay_id=f"{kind}:sample",
+            label=kind,
+            kind=kind,
+            latitude=36.45,
+            longitude=127.85,
+            elevation_m=None,
+            coordinate_system="EPSG:4326",
+            elevation_source="not_queried",
+            source="manual",
+        )
+
+        assert point.kind == kind
+        assert point.elevation_m is None
+        assert point.elevation_source == "not_queried"
 
 
 def test_monitoring_overlay_preserves_line_ids_and_scenario():
@@ -62,9 +121,15 @@ def test_simulation_overlay_exposes_candidate_points_and_ranked_routes():
         ),
         created_at=scenario.created_at,
     )
+    monitoring = MonitoringService().run_dc_power_flow(
+        scenario=scenario,
+        created_at=scenario.created_at,
+        load_scale=1.0,
+    )
 
     overlay = MapOverlayService().build_simulation_overlay(
         simulation,
+        baseline_monitoring=monitoring,
         map_capability=_map_2_5d_capability(),
     )
 
@@ -73,7 +138,11 @@ def test_simulation_overlay_exposes_candidate_points_and_ranked_routes():
     assert overlay.scenario.scenario_id == scenario.scenario_id
     assert overlay.source == "astar"
     assert len(candidate_points) == 3
+    assert len(overlay.lines) == len(monitoring.line_statuses)
     assert len(overlay.routes) == 3
+    assert {line.metadata["line_id"] for line in overlay.lines} == {
+        line.line_id for line in monitoring.line_statuses
+    }
     assert [route.rank for route in overlay.routes] == [1, 2, 3]
     assert overlay.routes[0].candidate_id == simulation.recommendations[0].candidate_id
     assert overlay.routes[0].metadata["score_total"] == simulation.recommendations[0].score.total_score

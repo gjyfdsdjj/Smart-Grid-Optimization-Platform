@@ -52,6 +52,11 @@ FallbackMode = Literal[
 MapOverlayKind = Literal[
     "bus",
     "line",
+    "power_plant",
+    "transmission_tower",
+    "start_point",
+    "end_point",
+    "install_point",
     "tower_candidate",
     "route",
     "route_point",
@@ -65,6 +70,19 @@ MapOverlayStatus = Literal[
     "overload",
     "unknown",
     "selected",
+]
+
+InstallationTargetKind = Literal[
+    "power_plant",
+    "transmission_tower",
+    "start_point",
+    "end_point",
+]
+
+InstallationMode = Literal[
+    "new",
+    "replace",
+    "review",
 ]
 
 
@@ -171,6 +189,31 @@ class MapOverlayResult:
     summary: str = ""
     warnings: list[str] = field(default_factory=list)
     fallback: FallbackInfo = field(default_factory=lambda: FallbackInfo(enabled=False))
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class InstallationPoint:
+    """사용자가 지도에서 선택한 설치 대상 지점.
+
+    longitude/latitude는 화면에서 x/y로 표시하고, elevation_m은 후속 정밀 지형
+    조회 결과를 담기 위한 슬롯이다. 현재 2.5D 경로에서는 elevation_m=None과
+    elevation_source="not_queried"를 유지한다.
+    """
+
+    installation_id: str
+    label: str
+    kind: InstallationTargetKind
+    latitude: float
+    longitude: float
+    mode: InstallationMode = "new"
+    elevation_m: float | None = None
+    coordinate_system: str = "EPSG:4326"
+    elevation_source: str = "not_queried"
+    capacity_mw: float | None = None
+    voltage_kv: float | None = None
+    notes: str = ""
+    created_at: datetime | None = None
     metadata: dict[str, object] = field(default_factory=dict)
 
 

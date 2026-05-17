@@ -8,6 +8,11 @@
 ## 전체 실행 구조
 ```text
 app.py
+  -> VWorldAdapter.get_map_capability(prefer_webgl=False)
+  -> VWorld WMTS tile URL / Folium 2.5D fallback
+  -> InstallationPoint / MapOverlayPoint
+  -> MapOverlayService.build_simulation_overlay()
+  -> 사용자가 선택한 x/y 설치 지점 session_state 저장
   -> pages/01_monitoring.py
        -> MonitoringService
        -> dc_power_flow / congestion_metrics
@@ -18,7 +23,8 @@ app.py
        -> astar_router / score_function
        -> counterfactual dc_power_flow
        -> SimulationResult / RecommendationResult / SimulationDelta
-       -> Folium 지도 직접 렌더링
+       -> MapOverlayService.build_simulation_overlay()
+       -> VWorld/Folium 2.5D 지도 또는 표 fallback
   -> pages/03_prediction.py
        -> PredictionService
        -> public_data_adapter / weather_adapter
@@ -32,7 +38,9 @@ app.py
 - Monitoring은 `MonitoringResult`, `MonitoringKpi`, `LineStatus`, `CongestionSummary`를 사용한다.
 - Simulation은 `SimulationInput`, `SimulationResult`, `RouteResult`, `ScoreBreakdown`, `RecommendationResult`, `SimulationDelta`를 사용한다.
 - Prediction은 `ForecastFeatureVector`, `HourlyLoadPrediction`, `RiskLine`, `PredictionResult`를 사용한다.
-- 지도 동기화용으로 `MapOverlayPoint`, `MapOverlayLine`, `MapOverlayRoute`, `MapOverlayResult`가 추가되어 있지만, 현재 `pages/02_simulation.py`는 아직 이 overlay 계약 대신 Folium을 직접 조립한다.
+- 지도 동기화용으로 `MapOverlayPoint`, `MapOverlayLine`, `MapOverlayRoute`, `MapOverlayResult`가 추가되어 있다.
+- 랜딩 설치 지점 저장용으로 `InstallationPoint`가 추가되었고, 설치 대상(`kind`)과 설치 모드(`mode`)를 계약 필드로 유지한다. 화면에는 x/y만 표시하되 내부 계약에는 `elevation_m=None`, `elevation_source="not_queried"`, `coordinate_system="EPSG:4326"`을 유지한다.
+- 현재 `app.py` 랜딩과 `pages/02_simulation.py`는 `MapOverlayService.build_simulation_overlay()` 결과를 Folium/VWorld 2.5D 지도 또는 표 fallback으로 표시한다.
 
 ## 작업자 식별
 | 역할 | Git author 기준 | 담당 축 |
@@ -287,16 +295,23 @@ app.py
 - Prediction 페이지가 신뢰하는 `PredictionResult.predictions`와 `risk_lines`의 최소 품질을 테스트가 고정한다.
 - 실제 repository data를 읽으므로 `integration` marker 적용 여부를 검토해야 한다.
 
+## 2026-05-17 랜딩·Simulation 지도 연결 보강
+- `app.py`는 VWorld 2.5D WMTS tile URL을 사용해 대한민국 중심 운영 지도를 표시한다.
+- 사용자가 지도에서 선택한 지점은 `InstallationPoint`로 저장되며, 화면에는 x/y만 표시하고 내부에는 고도 미조회 상태를 남긴다.
+- `pages/02_simulation.py`는 더 이상 페이지 안에서 `dc_power_flow.solve()`와 선로 좌표 dict를 직접 조립하지 않고, `MonitoringService.run_dc_power_flow()` 결과를 `MapOverlayService.build_simulation_overlay(..., baseline_monitoring=...)`에 넘겨 기존 선로/후보지/추천 경로를 같은 overlay 계약으로 렌더링한다.
+- Folium 또는 `streamlit_folium`이 없으면 지도 대신 overlay 표를 표시한다.
+
 ## 현재 남은 구조적 갭
-- `pages/02_simulation.py`는 `SimulationService`를 사용하면서도 지도용 DC Power Flow와 Folium layer를 직접 조립한다.
-- `MapOverlayService`는 Monitoring/Simulation/Prediction overlay 계약을 이미 만들지만, 실제 Streamlit 지도 페이지에는 아직 충분히 연결되지 않았다.
+- `app.py`는 VWorld 2.5D WMTS/Folium 랜딩과 설치 지점 저장 흐름을 갖췄지만, Streamlit/folium/streamlit_folium 의존성이 설치되지 않은 현재 WSL 환경에서는 실제 화면 실행 검증이 불가능하다.
+- `pages/02_simulation.py`는 overlay 기반으로 낮췄지만, 현재 WSL 환경에서는 Streamlit/Folium 의존성이 없어 실제 지도 클릭과 화면 렌더링 검증이 불가능하다.
+- `MapOverlayService`는 Monitoring/Simulation/Prediction overlay 계약을 이미 만들고 `app.py`와 Simulation 페이지에 연결되었지만, Monitoring/Prediction 개별 페이지에는 아직 충분히 연결되지 않았다.
 - `ScenarioService`는 JSON 저장/조회/삭제 서비스와 테스트가 있지만, 페이지 UI에는 저장/불러오기 흐름이 없다.
 - `src/domain`, `src/utils`, `src/engine/explain`, `src/engine/optimize`, `src/engine/recommend`는 대부분 한 줄 스텁이다.
 - `tests/test_model_quality.py`는 실제 raw data를 사용하므로 빠른 테스트와 통합 테스트를 marker로 분리하는 편이 맞다.
 
 ## 다음 구현 권장 순서
-1. `pages/02_simulation.py` 지도 레이어를 `MapOverlayService.build_simulation_overlay()` 기반으로 교체한다.
-2. `pages/01_monitoring.py`에 Monitoring overlay를 연결해 표의 `line_id`와 지도 선로 id를 동기화한다.
+1. `pages/01_monitoring.py`에 Monitoring overlay를 연결해 표의 `line_id`와 지도 선로 id를 동기화한다.
+2. `pages/03_prediction.py` 위험 선로를 `MapOverlayService.build_prediction_overlay()` 기반 지도 섹션과 연결한다.
 3. `ScenarioService` 저장/불러오기 UI를 Simulation 또는 공통 sidebar에 붙인다.
 4. Prediction 품질 테스트에 `integration` marker를 적용하고 빠른 synthetic 테스트와 분리한다.
 5. domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하되, 먼저 `schemas.py`와 중복되는 책임 경계를 정한다.

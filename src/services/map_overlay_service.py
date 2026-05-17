@@ -136,12 +136,42 @@ class MapOverlayService:
         self,
         result: SimulationResult,
         *,
+        baseline_monitoring: MonitoringResult | None = None,
         map_capability: MapCapability | None = None,
     ) -> MapOverlayResult:
         capability = _resolve_map_capability(map_capability)
-        points: list[MapOverlayPoint] = []
+        points_by_id: dict[str, MapOverlayPoint] = {}
+        lines: list[MapOverlayLine] = []
         routes: list[MapOverlayRoute] = []
         warnings: list[str] = []
+
+        if baseline_monitoring is not None:
+            for line in baseline_monitoring.line_statuses:
+                from_point = self._monitoring_bus_point(
+                    line.from_bus,
+                    fallback_label=line.from_bus_name,
+                    source=baseline_monitoring.source,
+                    warnings=warnings,
+                )
+                to_point = self._monitoring_bus_point(
+                    line.to_bus,
+                    fallback_label=line.to_bus_name,
+                    source=baseline_monitoring.source,
+                    warnings=warnings,
+                )
+                if from_point is None or to_point is None:
+                    continue
+
+                points_by_id.setdefault(from_point.overlay_id, from_point)
+                points_by_id.setdefault(to_point.overlay_id, to_point)
+                lines.append(
+                    _monitoring_line_overlay(
+                        line,
+                        from_point,
+                        to_point,
+                        baseline_monitoring.source,
+                    )
+                )
 
         for recommendation in result.recommendations:
             candidate_point = self._candidate_point_from_recommendation(
@@ -149,26 +179,33 @@ class MapOverlayService:
                 source=result.source,
             )
             if candidate_point is not None:
-                points.append(candidate_point)
+                points_by_id[candidate_point.overlay_id] = candidate_point
 
             route = _route_overlay_from_recommendation(recommendation, result.source)
             if route is not None:
                 routes.append(route)
 
+        source_fallback = result.fallback
+        source_warnings = list(result.warnings)
+        if baseline_monitoring is not None:
+            source_warnings.extend(baseline_monitoring.warnings)
+            if not source_fallback.enabled and baseline_monitoring.fallback.enabled:
+                source_fallback = baseline_monitoring.fallback
+
         return _build_overlay_result(
             scenario=result.scenario,
             created_at=result.created_at,
             source=result.source,
-            points=points,
-            lines=[],
+            points=list(points_by_id.values()),
+            lines=lines,
             routes=routes,
             summary=(
-                f"Simulation overlay: 후보지 {len(points)}개와 "
-                f"추천 경로 {len(routes)}개를 제공합니다."
+                f"Simulation overlay: 후보지 {len(result.recommendations)}개, "
+                f"기존 선로 {len(lines)}개, 추천 경로 {len(routes)}개를 제공합니다."
             ),
-            source_warnings=result.warnings,
+            source_warnings=source_warnings,
             local_warnings=warnings,
-            source_fallback=result.fallback,
+            source_fallback=source_fallback,
             map_capability=capability,
         )
 

@@ -644,3 +644,73 @@
   - `rg -n "WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17|반드시 먼저 읽을 파일|작업 타임라인 규칙" AGENTS.md`
   - `git diff --check -- AGENTS.md WORK_TIMELINE.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`
 - 다음 작업: 다음 구현 작업부터는 시작 시 `AGENTS.md -> WORK_TIMELINE.md -> docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md` 순서로 읽고, 남은 구조 정리 우선순위는 새 문서의 `현재 구조상 남은 결합 지점`을 함께 참고한다.
+
+### 2026-05-17 0번 작업 전 기준선 고정
+- 작업: 사용자 요청에 따라 1~6주차 잔여 구현 전 `0. 작업 전 고정` 단계를 수행했다. `git status --short`로 현재 dirty 상태를 확인하고, `AGENTS.md`, `WORK_TIMELINE.md`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, 회의안, 개발 흐름도를 다시 읽었다. 대량 modified 파일은 전체 라인 단위 diff로 보이나 핵심 파일 비교 결과 CRLF/줄바꿈성 차이가 주 원인임을 확인했다. `app.py`, `src/data/adapters/vworld_adapter.py`, `tests/test_vworld_adapter.py`는 `git status`에는 남아도 실제 diff가 없고, `pages/02_simulation.py`, `src/data/schemas.py`, `src/services/scenario_service.py`, `src/services/map_overlay_service.py`는 CR 제거 정규화 비교에서 HEAD와 동일했다.
+- 수정 파일: `WORK_TIMELINE.md`
+- 검증:
+  - `git status --short` -> 기존 modified 파일 다수 확인
+  - `git diff --name-status`, `git diff --stat`, `git diff --check` -> 112개 파일에 대해 대칭 삽입/삭제 및 CRLF 계열 trailing whitespace 폭발 확인
+  - `cmp -s <(git show HEAD:... | tr -d '\r') <(tr -d '\r' < ...)` -> `pages/02_simulation.py`, `src/data/schemas.py`, `src/services/scenario_service.py`, `src/services/map_overlay_service.py`, `app.py` 모두 `normalized_cmp=0`
+  - `python3 --version` -> `Python 3.10.12`
+  - `python3 -m pip --version` -> `/usr/bin/python3: No module named pip`
+  - `python3 -m venv .venv` -> `ensurepip is not available`, `python3.10-venv` 필요
+  - `sudo apt-get update` -> sudo 비밀번호 입력 불가로 실패
+  - `apt-get update` -> 권한 부족으로 실패
+  - `python3 -m ensurepip --version` -> `/usr/bin/python3: No module named ensurepip`
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -m compileall app.py pages src tests` -> 통과
+  - `python3 -m pytest tests/test_vworld_adapter.py -q`, `tests/test_map_overlay_contract.py`, `tests/test_service_integration_contract.py`, `tests/test_scenario_service.py`, `tests/test_simulation_route_score.py` -> 모두 `No module named pytest`로 미실행
+- 다음 작업: 시스템 권한으로 `python3.10-venv`와 `pip`를 준비하거나 다른 Python 실행 환경을 지정해야 pytest 검증을 수행할 수 있다. 코드 구현은 `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -m compileall app.py pages src tests`를 기준 정적 검증으로 사용하면서, 다음 순서는 `src/data/schemas.py` 공통 계약 검토 후 `src/data/adapters/vworld_adapter.py`의 VWorld 2.5D tile URL 계약 추가다.
+
+### 2026-05-17 VWorld 2.5D WMTS 타일 계약 추가
+- 작업: `src/data/schemas.py`의 지도 좌표 계약을 재검토한 결과 `MapOverlayPoint.elevation_m`, `coordinate_system`, `elevation_source`가 이미 있어 스키마 변경 없이 진행했다. `src/data/adapters/vworld_adapter.py`에 Folium/Leaflet이 바로 소비할 수 있는 VWorld WMTS 타일 URL 템플릿 생성 함수 `build_wmts_tile_url()`을 추가하고, `MapCapability.wmts_tile_url`에 연결했다. VWorld 키가 있으면 `prefer_webgl=False` 상태에서도 `rendering_mode="map_2_5d"`와 함께 `wmts_tile_url`을 제공하고, 키가 없으면 `wmts_tile_url=None`으로 fallback한다. API key는 tile 요청 URL에만 들어가며 warning/fallback reason에는 노출하지 않는 규칙을 테스트로 고정했다. 공식 V-world 교육 샘플의 Folium 타일 형식도 `docs/map_feasibility_2026-04-09.md`에 반영했다.
+- 수정 파일: `src/data/adapters/vworld_adapter.py`, `tests/test_vworld_adapter.py`, `docs/map_feasibility_2026-04-09.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -c "from src.data.adapters.vworld_adapter import build_wmts_tile_url, get_map_capability; ..."` -> `vworld-contract-ok`
+  - `git diff --check -- src/data/adapters/vworld_adapter.py tests/test_vworld_adapter.py docs/map_feasibility_2026-04-09.md` -> 통과
+  - `python3 -m pytest tests/test_vworld_adapter.py -q` -> `/usr/bin/python3: No module named pytest`로 미실행
+- 다음 작업: `app.py` 랜딩을 실제 제품 첫 화면으로 바꾸면서 `get_map_capability(prefer_webgl=False).wmts_tile_url`을 Folium tile layer에 연결한다. Folium 또는 `streamlit_folium`이 없어도 첫 화면이 죽지 않도록 lazy import와 기본 지도 fallback을 같이 둔다.
+
+### 2026-05-17 app.py VWorld 2.5D 랜딩 제품 화면 연결
+- 작업: `app.py`의 placeholder 첫 화면을 대한민국 중심 운영 지도 화면으로 교체했다. 기본 지도 경로는 `get_map_capability(prefer_webgl=False)`를 사용해 3D/WebGL을 렌더링하지 않고, VWorld 키가 있으면 `wmts_tile_url`을 Folium tile layer로 연결한다. VWorld 키가 없거나 Folium/streamlit_folium이 없으면 앱이 중단되지 않도록 표 기반 fallback을 둔다. 좌측 sidebar에는 발전소/송전탑 설치 대상, 설치 모드, 이름, 용량 또는 전압, 메모 입력을 추가했다. 지도 클릭 결과는 사용자에게 x/y만 표시하고, 내부 저장 계약은 새 `InstallationPoint`로 `elevation_m=None`, `elevation_source="not_queried"`, `coordinate_system="EPSG:4326"`을 유지한다. 랜딩 지도에는 mock 발전소/송전탑/버스와 `MapOverlayService.build_simulation_overlay()`의 후보지/추천 경로를 함께 올릴 수 있는 구조를 연결했다.
+- 수정 파일: `app.py`, `src/data/schemas.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -c "from src.data.schemas import InstallationPoint; from src.data.adapters.vworld_adapter import build_wmts_tile_url; ..."` -> `app-schema-vworld-ok`
+  - `git diff --check -- app.py src/data/schemas.py src/data/adapters/vworld_adapter.py tests/test_vworld_adapter.py docs/map_feasibility_2026-04-09.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
+  - `python3 -m pytest tests/test_vworld_adapter.py tests/test_map_overlay_contract.py -q` -> `/usr/bin/python3: No module named pytest`로 미실행
+  - 현재 WSL Python에는 `streamlit`, `folium`, `streamlit_folium`도 설치되어 있지 않아 실제 `streamlit run app.py` 화면 검증은 미실행
+- 다음 작업: `pages/02_simulation.py`의 직접 Folium/DC Power Flow 조립을 `MapOverlayService.build_simulation_overlay()` 기반으로 낮추고, 이후 Monitoring/Prediction 페이지도 같은 overlay 렌더러로 연결한다.
+
+### 2026-05-17 Simulation 페이지 overlay 기반 지도 정리
+- 작업: `pages/02_simulation.py`에서 지도용 `dc_power_flow.solve()`, `build_default_buses()`, `build_default_line_inputs()` 직접 호출과 페이지 내부 선로 좌표 dict 조립을 제거했다. Simulation 실행 버튼은 계속 `SimulationService.run_simulation()`만 핵심 결과로 사용하고, 지도는 `MonitoringService.run_dc_power_flow()` baseline 결과를 `MapOverlayService.build_simulation_overlay(..., baseline_monitoring=...)`에 함께 넘겨 기존 선로, 후보지, 추천 경로를 같은 overlay 계약으로 렌더링한다. Folium과 `streamlit_folium`은 lazy import로 바꿔 의존성이 없으면 지도 대신 overlay 표 fallback을 보여준다. `MapOverlayService.build_simulation_overlay()`는 optional `baseline_monitoring`을 받아 선로 overlay까지 포함할 수 있게 확장했다.
+- 수정 파일: `pages/02_simulation.py`, `src/services/map_overlay_service.py`, `tests/test_map_overlay_contract.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -c "from datetime import datetime; from src.data.schemas import ..."` -> `simulation-page-overlay-contract-ok`
+  - `git diff --check -- app.py pages/02_simulation.py src/data/schemas.py src/services/map_overlay_service.py src/data/adapters/vworld_adapter.py tests/test_vworld_adapter.py tests/test_map_overlay_contract.py docs/map_feasibility_2026-04-09.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md WORK_TIMELINE.md` -> 통과
+  - `python3 -m pytest tests/test_vworld_adapter.py tests/test_map_overlay_contract.py -q` -> `/usr/bin/python3: No module named pytest`로 미실행
+  - `streamlit run app.py --server.headless true --server.port 8501` -> `streamlit: command not found`
+  - 현재 WSL Python에는 `streamlit`, `folium`, `streamlit_folium`, `pandas`, `numpy`, `plotly`, `pytest`가 설치되어 있지 않아 실제 Streamlit 화면 검증은 미실행
+- 다음 작업: `pages/01_monitoring.py`에 동일한 지도 렌더러 계열을 붙여 Monitoring 표의 `line_id`와 지도 선로를 동기화한다.
+
+### 2026-05-17 1번 공통 계약 보강
+- 작업: 공통 계약 1번 범위에서 설치 지점 계약을 보강했다. `src/data/schemas.py`에 `InstallationMode`를 추가하고 `InstallationPoint.mode`를 기본값 `"new"`로 고정했다. 설치 대상은 `power_plant`, `transmission_tower`, `start_point`, `end_point`로 유지하고, 지도 overlay 종류에는 기존대로 설치/시작/종료/발전소/송전탑 지점이 포함된다. 화면 표시 좌표는 x=`longitude`, y=`latitude`이고 내부 계약에는 `elevation_m=None`, `elevation_source="not_queried"`, `coordinate_system="EPSG:4326"`을 남기는 규칙을 테스트로 고정했다. `app.py`는 설치 모드를 metadata가 아니라 `InstallationPoint.mode`에 저장하고, 설치 목록도 해당 필드를 읽도록 맞췄다.
+- 수정 파일: `src/data/schemas.py`, `app.py`, `tests/test_map_overlay_contract.py`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache python3 -c "from src.data.schemas import InstallationPoint, MapOverlayPoint, FallbackInfo; ..."` -> `common-contract-ok`
+  - `python3 -m pytest tests/test_map_overlay_contract.py -q` -> `/usr/bin/python3: No module named pytest`로 미실행
+- 다음 작업: pytest 실행 환경을 준비한 뒤 `tests/test_map_overlay_contract.py`를 실제로 실행하고, 이후 2번 VWorld/지도 어댑터 작업으로 넘어간다.
+
+### 2026-05-17 2번 VWorld/지도 어댑터 기본 2.5D 경로 고정
+- 작업: VWorld 지도 어댑터의 제품 기본 경로를 3D/WebGL이 아니라 2.5D로 고정했다. `get_map_capability()`의 기본 `prefer_webgl` 값을 `False`로 바꿔 VWorld key가 있어도 기본 반환은 `rendering_mode="map_2_5d"`, `fallback.mode="map_2_5d"`, `wmts_tile_url` 제공 상태가 되게 했다. WebGL은 `prefer_webgl=True`를 명시한 검증 경로에서만 열린다. `tests/test_vworld_adapter.py`에는 key가 있는 기본 호출이 2.5D인지, 명시 WebGL 호출만 `vworld_webgl`인지, fallback 메시지에 key와 domain이 노출되지 않는지를 고정했다. `docs/map_feasibility_2026-04-09.md`도 같은 결정으로 갱신했다.
+- 수정 파일: `src/data/adapters/vworld_adapter.py`, `tests/test_vworld_adapter.py`, `docs/map_feasibility_2026-04-09.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_vworld_adapter.py -q` -> 11개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_map_overlay_contract.py -q` -> 6개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "from src.data.adapters.vworld_adapter import get_map_capability; ..."` -> `vworld-default-2_5d-ok`
+  - `git diff --check -- src/data/adapters/vworld_adapter.py tests/test_vworld_adapter.py docs/map_feasibility_2026-04-09.md WORK_TIMELINE.md` -> 통과
+- 다음 작업: 검증 통과 후 3번 app 랜딩 제품화 범위가 현재 기본 2.5D 계약을 그대로 사용하는지 확인하고, 이후 4번 Monitoring 페이지 overlay 연결로 넘어간다.
