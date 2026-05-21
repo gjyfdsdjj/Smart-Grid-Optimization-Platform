@@ -45,6 +45,30 @@ _INSTALLATION_MODE_LABEL: dict[InstallationMode, str] = {
     "review": "검토",
 }
 
+_DEFAULT_POWER_PLANTS: tuple[dict[str, float | str], ...] = (
+    {"id": "incheon", "label": "인천 발전소", "latitude": 37.4563, "longitude": 126.7052, "capacity_mw": 1800.0},
+    {"id": "gwangju", "label": "광주 발전소", "latitude": 35.1595, "longitude": 126.8526, "capacity_mw": 1200.0},
+    {"id": "sokcho", "label": "속초 발전소", "latitude": 38.2070, "longitude": 128.5918, "capacity_mw": 700.0},
+    {"id": "busan", "label": "부산 발전소", "latitude": 35.1796, "longitude": 129.0756, "capacity_mw": 1600.0},
+    {"id": "ulsan", "label": "울산 발전소", "latitude": 35.5384, "longitude": 129.3114, "capacity_mw": 2400.0},
+    {"id": "pohang", "label": "포항 발전소", "latitude": 36.0190, "longitude": 129.3435, "capacity_mw": 1100.0},
+)
+
+_DEFAULT_TRANSMISSION_TOWERS: tuple[dict[str, float | str], ...] = (
+    {"id": "incheon", "label": "인천 송전탑", "latitude": 37.4563, "longitude": 126.7052},
+    {"id": "seoul", "label": "서울 송전탑", "latitude": 37.5665, "longitude": 126.9780},
+    {"id": "gangneung", "label": "강릉 송전탑", "latitude": 37.7519, "longitude": 128.8761},
+    {"id": "daejeon", "label": "대전 송전탑", "latitude": 36.3504, "longitude": 127.3845},
+    {"id": "naju", "label": "나주 송전탑", "latitude": 35.0161, "longitude": 126.7108},
+    {"id": "chungbuk", "label": "충북 송전탑", "latitude": 36.6424, "longitude": 127.4890},
+    {"id": "gumi", "label": "구미 송전탑", "latitude": 36.1195, "longitude": 128.3446},
+    {"id": "daegu", "label": "대구 송전탑", "latitude": 35.8714, "longitude": 128.6014},
+    {"id": "busan", "label": "부산 송전탑", "latitude": 35.1796, "longitude": 129.0756},
+    {"id": "ulsan", "label": "울산 송전탑", "latitude": 35.5384, "longitude": 129.3114},
+    {"id": "sangju", "label": "상주 송전탑", "latitude": 36.4109, "longitude": 128.1591},
+    {"id": "haenam", "label": "해남 송전탑", "latitude": 34.5733, "longitude": 126.5993},
+)
+
 def main() -> None:
     st.set_page_config(
         page_title="SGOP",
@@ -89,9 +113,9 @@ def main() -> None:
         st.caption(f"Fallback: `{map_capability.fallback.mode}`")
 
     summary_cols = st.columns(4)
-    summary_cols[0].metric("설치 지점", f"{len(st.session_state.sgop_landing_installations)}개")
-    summary_cols[1].metric("발전소", f"{_count_installations('power_plant')}개")
-    summary_cols[2].metric("송전탑", f"{_count_installations('transmission_tower')}개")
+    summary_cols[0].metric("추가 지점", f"{len(st.session_state.sgop_landing_installations)}개")
+    summary_cols[1].metric("기본 발전소", f"{len(_DEFAULT_POWER_PLANTS)}개")
+    summary_cols[2].metric("기본 송전탑", f"{len(_DEFAULT_TRANSMISSION_TOWERS)}개")
     summary_cols[3].metric("좌표계", "EPSG:4326")
 
     overlay_points = _build_landing_points(service_overlay)
@@ -274,80 +298,46 @@ def _build_landing_points(service_overlay: MapOverlayResult | None) -> list[MapO
 
 
 def _build_mock_grid_points() -> list[MapOverlayPoint]:
-    return [
-        MapOverlayPoint(
-            overlay_id="plant:ulsan",
-            label="울산 발전소",
-            kind="power_plant",
-            latitude=35.5384,
-            longitude=129.3114,
-            elevation_m=None,
-            elevation_source="not_queried",
-            status="normal",
-            source="manual",
-            metadata={"asset_type": "power_plant", "capacity_mw": 2400.0},
-        ),
-        MapOverlayPoint(
-            overlay_id="plant:incheon",
-            label="인천 발전소",
-            kind="power_plant",
-            latitude=37.4563,
-            longitude=126.7052,
-            elevation_m=None,
-            elevation_source="not_queried",
-            status="normal",
-            source="manual",
-            metadata={"asset_type": "power_plant", "capacity_mw": 1800.0},
-        ),
-        MapOverlayPoint(
-            overlay_id="tower:gapyeong",
-            label="신가평 송전탑",
-            kind="transmission_tower",
-            latitude=37.8350,
-            longitude=127.5110,
-            elevation_m=None,
-            elevation_source="not_queried",
-            status="normal",
-            source="manual",
-            metadata={"asset_type": "transmission_tower", "voltage_kv": 345.0},
-        ),
-        MapOverlayPoint(
-            overlay_id="tower:daejeon",
-            label="대전 송전탑",
-            kind="transmission_tower",
-            latitude=36.3504,
-            longitude=127.3845,
-            elevation_m=None,
-            elevation_source="not_queried",
-            status="warning",
-            source="manual",
-            metadata={"asset_type": "transmission_tower", "voltage_kv": 345.0},
-        ),
-        MapOverlayPoint(
-            overlay_id="bus:seoul",
-            label="서울 버스",
-            kind="bus",
-            latitude=37.5665,
-            longitude=126.9780,
-            elevation_m=None,
-            elevation_source="not_queried",
-            status="normal",
-            source="manual",
-            metadata={"bus_id": "BUS_001"},
-        ),
-        MapOverlayPoint(
-            overlay_id="bus:daegu",
-            label="대구 버스",
-            kind="bus",
-            latitude=35.8714,
-            longitude=128.6014,
-            elevation_m=None,
-            elevation_source="not_queried",
-            status="normal",
-            source="manual",
-            metadata={"bus_id": "BUS_011"},
-        ),
-    ]
+    points: list[MapOverlayPoint] = []
+    for plant in _DEFAULT_POWER_PLANTS:
+        points.append(
+            MapOverlayPoint(
+                overlay_id=f"plant:{plant['id']}",
+                label=str(plant["label"]),
+                kind="power_plant",
+                latitude=float(plant["latitude"]),
+                longitude=float(plant["longitude"]),
+                elevation_m=None,
+                elevation_source="not_queried",
+                status="normal",
+                source="manual",
+                metadata={
+                    "asset_type": "power_plant",
+                    "default_asset": True,
+                    "capacity_mw": float(plant["capacity_mw"]),
+                },
+            )
+        )
+    for tower in _DEFAULT_TRANSMISSION_TOWERS:
+        points.append(
+            MapOverlayPoint(
+                overlay_id=f"tower:{tower['id']}",
+                label=str(tower["label"]),
+                kind="transmission_tower",
+                latitude=float(tower["latitude"]),
+                longitude=float(tower["longitude"]),
+                elevation_m=None,
+                elevation_source="not_queried",
+                status="normal",
+                source="manual",
+                metadata={
+                    "asset_type": "transmission_tower",
+                    "default_asset": True,
+                    "voltage_kv": 345.0,
+                },
+            )
+        )
+    return points
 
 
 def _extract_clicked_point(map_data: dict[str, Any] | None) -> MapOverlayPoint | None:
@@ -487,14 +477,6 @@ def _kind_label(kind: str) -> str:
         "route": "경로",
     }
     return labels.get(kind, kind)
-
-
-def _count_installations(kind: InstallationTargetKind) -> int:
-    return sum(
-        1
-        for installation in st.session_state.sgop_landing_installations
-        if installation.kind == kind
-    )
 
 
 def _dedupe_points(points: list[MapOverlayPoint]) -> list[MapOverlayPoint]:

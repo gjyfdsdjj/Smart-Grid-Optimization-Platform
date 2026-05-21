@@ -31,12 +31,37 @@ def test_landing_click_extracts_xy_only_install_point():
 def test_landing_mock_points_include_product_map_assets():
     points = app._build_mock_grid_points()
     kinds = {point.kind for point in points}
+    plant_labels = {point.label for point in points if point.kind == "power_plant"}
+    tower_labels = {point.label for point in points if point.kind == "transmission_tower"}
 
-    assert {"power_plant", "transmission_tower", "bus"} <= kinds
+    assert kinds == {"power_plant", "transmission_tower"}
+    assert plant_labels == {
+        "인천 발전소",
+        "광주 발전소",
+        "속초 발전소",
+        "부산 발전소",
+        "울산 발전소",
+        "포항 발전소",
+    }
+    assert tower_labels == {
+        "인천 송전탑",
+        "서울 송전탑",
+        "강릉 송전탑",
+        "대전 송전탑",
+        "나주 송전탑",
+        "충북 송전탑",
+        "구미 송전탑",
+        "대구 송전탑",
+        "부산 송전탑",
+        "울산 송전탑",
+        "상주 송전탑",
+        "해남 송전탑",
+    }
     assert all(point.coordinate_system == "EPSG:4326" for point in points)
     assert all(point.elevation_m is None for point in points)
     assert all(point.elevation_source == "not_queried" for point in points)
     assert all(point.source == "manual" for point in points)
+    assert all(point.metadata.get("default_asset") is True for point in points)
     assert any(point.metadata.get("capacity_mw") for point in points if point.kind == "power_plant")
     assert any(point.metadata.get("voltage_kv") for point in points if point.kind == "transmission_tower")
 

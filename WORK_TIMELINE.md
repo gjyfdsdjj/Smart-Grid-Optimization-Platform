@@ -916,3 +916,24 @@
   - `git diff --check -- AGENTS.md README.md WORK_TIMELINE.md docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md src/data/schemas.py src/services/simulation_service.py src/services/map_overlay_service.py pages/02_simulation.py tests/test_simulation_route_score.py tests/test_simulation_page_contract.py tests/test_map_overlay_contract.py` -> 통과
   - `curl -I http://127.0.0.1:8501` -> HTTP 200 확인
 - 다음 작업: 실제 브라우저에서 app landing 송전탑 추가 -> Simulation 후보 선택 -> 실행 -> 지도/추천표 표시를 수동 확인하거나, domain 스텁을 실제 모델로 정리한다.
+
+### 2026-05-21 랜딩 기본 발전소/송전탑 고정 데이터 반영
+- 작업: 실제 발전소/송전망 외부 데이터를 사용하지 않는 MVP 방향에 맞춰 `app.py`의 랜딩 기본 지도 자산을 사용자가 지정한 고정 발전소/송전탑 위치로 교체했다. 발전소 기본 지점은 인천, 광주, 속초, 부산, 울산, 포항 6개이며, 송전탑 기본 지점은 인천, 서울, 강릉, 대전, 나주, 충북, 구미, 대구, 부산, 울산, 상주, 해남 12개다. 기존 지도 클릭 기반 추가 설치 흐름은 유지해 후속으로 사용자가 원하는 위치를 계속 추가할 수 있다.
+- 수정 파일: `app.py`, `src/ui/map_overlay_renderer.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `app._build_mock_grid_points()`는 외부 데이터가 아니라 고정 manual asset만 반환한다.
+  - 모든 기본 지점은 `coordinate_system="EPSG:4326"`, `elevation_m=None`, `elevation_source="not_queried"`를 유지한다.
+  - 기본 발전소/송전탑은 `metadata.default_asset=True`로 구분된다.
+  - 지도 클릭 후 추가하는 발전소/송전탑은 기존 `InstallationPoint` 저장 흐름을 그대로 사용한다.
+  - 현재 `.venv`에 `folium`, `streamlit-folium`이 없어 지도 대신 표 fallback만 뜨던 문제를 확인했고, 해당 패키지를 설치했다.
+  - Folium 계열 import가 실패하는 환경에서도 지도가 완전히 사라지지 않도록 `render_overlay_fallback_map()`을 추가해 `st.map` fallback을 먼저 표시한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/Scripts/python.exe -m compileall app.py pages src tests` -> 통과
+  - `.venv/Scripts/python.exe -c "import app; ...; print('landing-fixed-assets-ok')"` -> 발전소 6개, 송전탑 12개, 좌표계/고도 metadata 수동 assertion 통과
+  - `.venv/Scripts/python.exe -m pip install folium streamlit-folium` -> `folium==0.20.0`, `streamlit-folium==0.27.2` 설치
+  - `.venv/Scripts/python.exe -c "from src.ui.map_overlay_renderer import _load_map_libraries; ...; print('folium-renderer-ok')"` -> Folium 렌더러 import 확인
+  - `git diff --check -- app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py WORK_TIMELINE.md` -> 통과
+  - `.venv/Scripts/python.exe -m streamlit run app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true` -> 서버 기동, `cmd.exe /C "curl -I http://127.0.0.1:8501"` HTTP 200 확인
+  - `.venv/Scripts/python.exe -m pytest tests/test_app_landing_contract.py -q` -> 현재 `.venv`에 `pytest`가 없어 실행 불가
+  - `.venv310/Scripts/python.exe -m pytest tests/test_app_landing_contract.py -q` -> 현재 `.venv310` 경로가 `No Python at '"/usr/bin\\python.exe'`로 깨져 실행 불가
+- 다음 작업: 필요하면 Monitoring/Simulation 내부 mock 버스/후보지 좌표도 같은 고정 송전탑 목록을 기준으로 재정렬한다.

@@ -41,6 +41,7 @@ def render_map_overlay(
     folium, st_folium, import_error = _load_map_libraries()
     if import_error is not None:
         st.warning(f"지도 라이브러리 fallback: {import_error}")
+        render_overlay_fallback_map(overlay)
         render_overlay_fallback_tables(overlay, show_points=show_point_table)
         return None
 
@@ -122,6 +123,49 @@ def render_overlay_fallback_tables(
         st.dataframe(pd.DataFrame(route_rows), width="stretch", hide_index=True)
     if point_rows and (show_points or (not line_rows and not route_rows)):
         st.dataframe(pd.DataFrame(point_rows), width="stretch", hide_index=True)
+
+
+def render_overlay_fallback_map(overlay: MapOverlayResult) -> None:
+    """Render a native Streamlit map when Folium is unavailable."""
+
+    rows: list[dict[str, float | str]] = []
+    for point in overlay.points:
+        rows.append(
+            {
+                "latitude": point.latitude,
+                "longitude": point.longitude,
+                "label": point.label,
+            }
+        )
+    for line in overlay.lines:
+        rows.extend(
+            [
+                {
+                    "latitude": line.from_point.latitude,
+                    "longitude": line.from_point.longitude,
+                    "label": line.from_point.label,
+                },
+                {
+                    "latitude": line.to_point.latitude,
+                    "longitude": line.to_point.longitude,
+                    "label": line.to_point.label,
+                },
+            ]
+        )
+    for route in overlay.routes:
+        for point in route.points:
+            rows.append(
+                {
+                    "latitude": point.latitude,
+                    "longitude": point.longitude,
+                    "label": point.label,
+                }
+            )
+
+    if not rows:
+        return
+
+    st.map(pd.DataFrame(rows), latitude="latitude", longitude="longitude", use_container_width=True)
 
 
 def line_id_from_overlay_line(line: MapOverlayLine) -> str:
