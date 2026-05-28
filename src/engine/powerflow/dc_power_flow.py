@@ -9,30 +9,6 @@ import numpy as np
 
 BASE_MVA: float = 100.0  # 시스템 기준 용량 (MVA)
 
-# ── 한국 345kV 주요 버스 ────────────────────────────────────────────────────────
-
-SLACK_BUS: str = "B06"  # 서울동 – 기준 버스 (θ = 0)
-
-# (line_id, from_bus, to_bus, reactance_pu, capacity_mw)
-LINE_DEFS: list[tuple[str, str, str, float, float]] = [
-    ("L01", "B01", "B02", 0.020, 400.0),
-    ("L02", "B02", "B06", 0.012, 400.0),
-    ("L03", "B13", "B06", 0.008, 350.0),
-    ("L04", "B06", "B08", 0.005, 300.0),
-    ("L05", "B06", "B12", 0.008, 350.0),
-    ("L06", "B08", "B07", 0.010, 200.0),
-    ("L07", "B12", "B07", 0.008, 200.0),
-    ("L08", "B07", "B03", 0.012, 250.0),
-    ("L09", "B03", "B09", 0.012, 200.0),
-    ("L10", "B09", "B04", 0.018, 200.0),
-    ("L11", "B04", "B05", 0.014, 180.0),
-    ("L12", "B05", "B10", 0.014, 150.0),
-    ("L13", "B10", "B11", 0.014, 180.0),
-    ("L14", "B11", "B13", 0.018, 250.0),
-    ("L15", "B02", "B11", 0.025, 250.0),
-]
-
-
 # ── 입출력 데이터클래스 ────────────────────────────────────────────────────────
 
 @dataclass
@@ -181,56 +157,20 @@ def solve(
     )
 
 
-# ── 기본 네트워크 빌더 ────────────────────────────────────────────────────────
-
 def build_default_line_inputs() -> list[LineInput]:
-    """LINE_DEFS 로부터 LineInput 목록을 반환한다."""
-    return [
-        LineInput(
-            line_id=lid,
-            from_bus=fb,
-            to_bus=tb,
-            reactance_pu=x,
-            capacity_mw=cap,
-        )
-        for lid, fb, tb, x, cap in LINE_DEFS
-    ]
+    """현재 기본 GridDataset으로부터 LineInput 목록을 반환한다."""
+    from src.data.grid_powerflow_adapter import build_powerflow_inputs_from_grid
+    from src.data.loaders import load_grid_dataset_or_default
+
+    dataset = load_grid_dataset_or_default()
+    return build_powerflow_inputs_from_grid(dataset).lines
 
 
 def build_default_buses(load_scale: float = 1.0) -> list[BusInput]:
-    """부하 배율을 적용한 기본 버스 입력 목록을 반환한다.
+    """현재 기본 GridDataset으로부터 부하 배율이 적용된 BusInput 목록을 반환한다."""
+    from src.data.grid_powerflow_adapter import build_powerflow_inputs_from_grid
+    from src.data.loaders import load_grid_dataset_or_default
 
-    발전·부하 배분
-    -------------
-    - 분산 발전으로 non-slack 순 주입 합계 ≈ -430 MW 설계
-    - 슬랙(B06)이 ~430 MW 공급 → L04/L05 현실적 이용률 달성
-    - 슬랙 외 발전 버스: B01(대형), B02·B07·B08·B09·B12(소형 분산), B11·B13(중형)
-    """
-    # 발전·부하 배분 원칙
-    # - B11(인천북) 잉여 제거: 환형 위치의 대규모 발전은 역방향 루프 조류를 유발
-    # - 부하 근처(B04·B05·B07·B08)에 소형 분산발전 배치 → 장거리 조류 감소
-    # - non-slack net ≈ -350 MW → B06 슬랙이 350 MW 공급
-    _BUS_DATA: list[tuple[str, float, float]] = [
-        ("B01",  500.0,  210.0),   # 신가평  – 대형 발전 (net +290)
-        ("B02",  200.0,  240.0),   # 양주    – 소형 분산 (net  -40)
-        ("B03",    0.0,  180.0),   # 신용인               (net -180)
-        ("B04",  120.0,  150.0),   # 신안성  – 소형 분산 (net  -30)
-        ("B05",  100.0,  130.0),   # 신평택  – 소형 분산 (net  -30)
-        ("B06",  900.0,  400.0),   # 서울동  – 슬랙
-        ("B07",  150.0,  200.0),   # 분당    – 소형 분산 (net  -50)
-        ("B08",  150.0,  220.0),   # 동서울  – 소형 분산 (net  -70)
-        ("B09",   75.0,  160.0),   # 수원    – 소형 분산 (net  -85)
-        ("B10",  200.0,  120.0),   # 신시흥  – 분산발전  (net  +80)
-        ("B11",  150.0,  150.0),   # 인천북  – 자체 균형 (net    0)
-        ("B12",   50.0,  260.0),   # 신강남  – 소형 분산 (net -210)
-        ("B13",  400.0,  180.0),   # 신서울  – 중형 발전 (net +220)
-    ]
-    return [
-        BusInput(
-            bus_id=bid,
-            p_gen_mw=gen,
-            p_load_mw=round(load * load_scale, 1),
-            is_slack=(bid == SLACK_BUS),
-        )
-        for bid, gen, load in _BUS_DATA
-    ]
+    dataset = load_grid_dataset_or_default(load_scale=load_scale)
+    return build_powerflow_inputs_from_grid(dataset).buses
+

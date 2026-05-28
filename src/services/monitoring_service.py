@@ -2,17 +2,20 @@
 from __future__ import annotations
 
 import math
-import random
 from datetime import datetime, timedelta
 
 from src.data.schemas import (
     CongestionSummary,
+    GridDataset,
+    InstallationPoint,
     LineStatus,
     MonitoringKpi,
     MonitoringResult,
     ScenarioContext,
     TimeSeriesPoint,
 )
+from src.data.loaders import load_grid_dataset_or_default
+from src.data.grid_powerflow_adapter import build_powerflow_inputs_from_grid
 from src.engine.powerflow import dc_power_flow as _dcpf
 from src.engine.powerflow.congestion_metrics import (
     compute_congestion_summary,
@@ -24,47 +27,6 @@ from src.services.result_metadata import (
     build_no_fallback_info,
     build_source_warning,
 )
-
-# ── 한국 345kV 주요 버스 (13개) ────────────────────────────────────────────────
-# (bus_id, 이름)
-_BUSES: dict[str, str] = {
-    "B01": "신가평",
-    "B02": "양주",
-    "B03": "신용인",
-    "B04": "신안성",
-    "B05": "신평택",
-    "B06": "서울동",
-    "B07": "분당",
-    "B08": "동서울",
-    "B09": "수원",
-    "B10": "신시흥",
-    "B11": "인천북",
-    "B12": "신강남",
-    "B13": "신서울",
-}
-
-# ── mock 선로 정의 ─────────────────────────────────────────────────────────────
-# (line_id, from_bus, to_bus, base_flow_mw, capacity_mw)
-# base_flow_mw: 부하 배율 1.0 기준 기본 전력 흐름
-# capacity_mw : 열적 한계 용량
-_MOCK_LINE_DEFS: list[tuple[str, str, str, float, float]] = [
-    ("L01", "B01", "B02", 210.0, 400.0),   # 신가평 → 양주
-    ("L02", "B02", "B06", 285.0, 400.0),   # 양주 → 서울동
-    ("L03", "B13", "B06", 260.0, 350.0),   # 신서울 → 서울동
-    ("L04", "B06", "B08", 175.0, 300.0),   # 서울동 → 동서울
-    ("L05", "B06", "B12", 310.0, 350.0),   # 서울동 → 신강남  (경고 구간)
-    ("L06", "B08", "B07", 140.0, 200.0),   # 동서울 → 분당
-    ("L07", "B12", "B07", 185.0, 200.0),   # 신강남 → 분당    (경고 구간)
-    ("L08", "B07", "B03", 155.0, 250.0),   # 분당 → 신용인
-    ("L09", "B03", "B09", 125.0, 200.0),   # 신용인 → 수원
-    ("L10", "B09", "B04", 108.0, 200.0),   # 수원 → 신안성
-    ("L11", "B04", "B05", 92.0,  180.0),   # 신안성 → 신평택
-    ("L12", "B05", "B10", 145.0, 150.0),   # 신평택 → 신시흥  (위험 구간)
-    ("L13", "B10", "B11", 68.0,  180.0),   # 신시흥 → 인천북
-    ("L14", "B11", "B13", 115.0, 250.0),   # 인천북 → 신서울
-    ("L15", "B02", "B11", 78.0,  250.0),   # 양주 → 인천북
-]
-
 
 # ── 내부 헬퍼 ─────────────────────────────────────────────────────────────────
 
@@ -100,23 +62,43 @@ def _kpi_status_from_risk(risk_level: str) -> str:
     return "normal"
 
 
-def _build_lines(load_scale: float) -> list[LineStatus]:
-    rng = random.Random(42)
+def _build_lines_from_grid(dataset: GridDataset) -> list[LineStatus]:
+    node_by_id = {
+        node.node_id: node
+        for node in dataset.nodes
+    }
+    profile_by_node_id = {
+        profile.node_id: profile
+        for profile in dataset.power_profiles
+    }
     lines: list[LineStatus] = []
-    for lid, fb, tb, base_flow, cap in _MOCK_LINE_DEFS:
-        noise = 1.0 + rng.uniform(-0.04, 0.04)
-        flow = round(base_flow * load_scale * noise, 1)
-        util = round(flow / cap, 4)
-        loss = round(flow * 0.004 * util, 2)
+
+    for grid_line in dataset.lines:
+        if grid_line.status == "out_of_service":
+            continue
+        from_node = node_by_id.get(grid_line.from_node_id)
+        to_node = node_by_id.get(grid_line.to_node_id)
+        if from_node is None or to_node is None:
+            continue
+        from_profile = profile_by_node_id.get(from_node.node_id)
+        to_profile = profile_by_node_id.get(to_node.node_id)
+        from_load = from_profile.load_mw if from_profile is not None else from_node.base_load_mw
+        to_load = to_profile.load_mw if to_profile is not None else to_node.base_load_mw
+        endpoint_pressure = max(0.0, from_load, to_load)
+        imbalance = abs(from_load - to_load)
+        terrain_factor = 1.0 + (grid_line.terrain_risk * 0.04)
+        flow = round(((endpoint_pressure * 0.95) + (imbalance * 0.20)) * terrain_factor, 1)
+        util = round(flow / grid_line.capacity_mw, 4) if grid_line.capacity_mw > 0.0 else 0.0
+        loss = round(flow * max(0.004, grid_line.loss_factor) * util, 2)
         lines.append(
             LineStatus(
-                line_id=lid,
-                from_bus=fb,
-                to_bus=tb,
-                from_bus_name=_BUSES[fb],
-                to_bus_name=_BUSES[tb],
+                line_id=grid_line.line_id,
+                from_bus=from_node.node_id,
+                to_bus=to_node.node_id,
+                from_bus_name=from_node.node_name,
+                to_bus_name=to_node.node_name,
                 flow_mw=flow,
-                capacity_mw=cap,
+                capacity_mw=grid_line.capacity_mw,
                 utilization=util,
                 status=_congestion_status(util),      # type: ignore[arg-type]
                 risk_level=_classify_risk(util),      # type: ignore[arg-type]
@@ -188,15 +170,19 @@ def _build_kpis(
     ]
 
 
-def _build_trend_points(load_scale: float, base_time: datetime) -> list[TimeSeriesPoint]:
+def _build_trend_points(
+    load_scale: float,
+    base_time: datetime,
+    *,
+    base_load_mw: float = 35_000.0,
+) -> list[TimeSeriesPoint]:
     """과거 12시간 총부하 mock 추세 (sinusoidal 패턴)."""
-    base_load = 35_000.0
     base_hour = _round_to_hour(base_time)
     points: list[TimeSeriesPoint] = []
     for offset in range(-11, 1):
         t = base_hour + timedelta(hours=offset)
         wave = math.sin((t.hour / 24.0) * 2 * math.pi) * 0.15
-        load = base_load * load_scale * (1.0 + wave)
+        load = base_load_mw * load_scale * (1.0 + wave)
         points.append(TimeSeriesPoint(timestamp=t, value=round(load, 0), label=f"{t:%H}:00"))
     return points
 
@@ -279,9 +265,17 @@ class MonitoringService:
         validated_load_scale, input_warnings = self._validate_load_scale(load_scale)
         now = self._resolve_created_at(created_at)
         resolved_scenario = self._resolve_scenario(scenario, now)
-        lines = _build_lines(validated_load_scale)
+        dataset = load_grid_dataset_or_default(
+            created_at=now,
+            load_scale=validated_load_scale,
+        )
+        lines = _build_lines_from_grid(dataset)
         cs = _build_congestion_summary(lines)
-        trend = _build_trend_points(validated_load_scale, now)
+        trend = _build_trend_points(
+            validated_load_scale,
+            now,
+            base_load_mw=float(dataset.metadata.get("default_total_load_mw", 35_000.0)),
+        )
 
         return MonitoringResult(
             scenario=resolved_scenario,
@@ -296,10 +290,16 @@ class MonitoringService:
             warnings=input_warnings + _build_warnings(lines),
             fallback=build_fallback_info(
                 mode="mock_data",
-                reason="실제 dc_power_flow 엔진 대신 mock 결과를 사용합니다.",
+                reason="실제 dc_power_flow 엔진 대신 GridDataset 기반 mock 결과를 사용합니다.",
                 primary_path="src.engine.powerflow.dc_power_flow",
                 active_path="src.services.monitoring_service.MonitoringService.run_mock_monitoring",
             ),
+            metadata={
+                "grid_dataset": dataset,
+                "grid_node_count": len(dataset.nodes),
+                "grid_line_count": len(dataset.lines),
+                "legacy_bus_source": False,
+            },
         )
 
     def run_dc_power_flow(
@@ -308,10 +308,13 @@ class MonitoringService:
         load_scale: float = 1.0,
         *,
         created_at: datetime | None = None,
+        grid_dataset: GridDataset | None = None,
+        user_installations: list[InstallationPoint] | None = None,
     ) -> MonitoringResult:
         """DC Power Flow 계산으로 MonitoringResult 를 생성한다.
 
-        DC 계산이 실패하면 자동으로 run_mock_monitoring() 으로 fallback 한다.
+        GridDataset 기반 DC 계산이 실패하면 자동으로 run_mock_monitoring() 으로
+        fallback 한다.
 
         Parameters
         ----------
@@ -321,22 +324,41 @@ class MonitoringService:
             전체 부하 배율. 1.0 = 기준 부하.
         created_at:
             결과 기준 시각. None 이면 현재 시각을 사용한다.
+        grid_dataset:
+            이미 조립된 GridDataset. None 이면 기본 발전소/송전탑과 사용자 설치
+            지점으로 GridDataset을 생성한다.
+        user_installations:
+            grid_dataset이 없을 때 GridNode로 반영할 랜딩 설치 지점 목록.
         """
         validated_load_scale, input_warnings = self._validate_load_scale(load_scale)
         now = self._resolve_created_at(created_at)
         resolved_scenario = self._resolve_scenario(scenario, now)
 
         try:
-            buses = _dcpf.build_default_buses(validated_load_scale)
-            lines = _dcpf.build_default_line_inputs()
-            dc_result = _dcpf.solve(buses, lines)
+            dataset = grid_dataset or load_grid_dataset_or_default(
+                user_installations=user_installations or [],
+                created_at=now,
+                load_scale=validated_load_scale,
+            )
+            powerflow_inputs = build_powerflow_inputs_from_grid(dataset)
+            dc_result = _dcpf.solve(
+                powerflow_inputs.buses,
+                powerflow_inputs.lines,
+            )
 
             if not dc_result.converged:
                 raise RuntimeError(dc_result.error)
 
-            line_statuses = compute_line_statuses(dc_result)
+            line_statuses = compute_line_statuses(
+                dc_result,
+                bus_names=powerflow_inputs.bus_names,
+            )
             cs = compute_congestion_summary(line_statuses)
-            trend = _build_trend_points(validated_load_scale, now)
+            trend = _build_trend_points(
+                validated_load_scale,
+                now,
+                base_load_mw=float(dataset.metadata.get("default_total_load_mw", 35_000.0)),
+            )
 
             return MonitoringResult(
                 scenario=resolved_scenario,
@@ -348,8 +370,24 @@ class MonitoringService:
                 kpis=_build_kpis(cs, trend),
                 trend_points=trend,
                 summary=_build_summary_text(cs, line_statuses),
-                warnings=input_warnings + [build_source_warning("MonitoringService", "dc_power_flow")],
+                warnings=[
+                    *input_warnings,
+                    build_source_warning("MonitoringService", "dc_power_flow"),
+                    *dataset.warnings,
+                    *powerflow_inputs.warnings,
+                ],
                 fallback=build_no_fallback_info(),
+                metadata={
+                    "grid_dataset": dataset,
+                    "grid_node_count": len(dataset.nodes),
+                    "grid_line_count": len(dataset.lines),
+                    "powerflow_line_count": len(powerflow_inputs.lines),
+                    "powerflow_line_policy": "non_outage",
+                    "slack_bus_id": powerflow_inputs.slack_bus_id,
+                    "included_line_ids": list(powerflow_inputs.included_line_ids),
+                    "excluded_line_ids": list(powerflow_inputs.excluded_line_ids),
+                    "legacy_bus_source": False,
+                },
             )
 
         except Exception as exc:  # noqa: BLE001
@@ -365,7 +403,7 @@ class MonitoringService:
             fallback_result.fallback = build_fallback_info(
                 mode="mock_data",
                 reason=str(exc),
-                primary_path="src.engine.powerflow.dc_power_flow.solve",
+                primary_path="src.data.grid_powerflow_adapter -> src.engine.powerflow.dc_power_flow.solve",
                 active_path="src.services.monitoring_service.MonitoringService.run_mock_monitoring",
             )
             return fallback_result
@@ -378,7 +416,7 @@ class MonitoringService:
         created_at: datetime | None = None,
     ) -> MonitoringResult:
         """기존 호출부 호환용 wrapper."""
-        return self.run_mock_monitoring(
+        return self.run_dc_power_flow(
             scenario=scenario,
             load_scale=load_scale,
             created_at=created_at,

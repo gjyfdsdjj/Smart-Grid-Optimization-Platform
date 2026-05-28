@@ -5,6 +5,13 @@
 - 기준 명령은 `git log --all --date=iso-strict`, `git show --name-status`, `git show -m --name-status`다.
 - 사용자가 언급한 `hss86212002@gmail.com`은 Git 기록에 없고, 실제 기록은 `hss85212002@gmail.com`이다.
 
+## 2026-05-29 Grid 전환 상태 메모
+- 아래 2026-04~05 초반 항목에는 당시 구현 기준의 legacy 버스/후보지 설명이 남아 있다.
+- 현재 기본 실행 경로는 `data/grid/enhanced/` CSV와 `GridDataset`이다.
+- Monitoring/DC Power Flow는 `GridDataset -> BusInput/LineInput` 변환기를 사용한다.
+- Simulation 후보지는 기본/CSV/사용자 송전탑 GridNode를 사용하고, A* edge는 `GridLine`에서 온다.
+- Prediction은 KPX 전국 수급 시계열을 GridNode 부하 가중치로 재분배하고, GNN edge는 `GridLine`에서 생성한다.
+
 ## 전체 실행 구조
 ```text
 app.py

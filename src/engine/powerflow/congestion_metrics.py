@@ -7,25 +7,6 @@ from src.data.schemas import (
 )
 from src.engine.powerflow.dc_power_flow import DCFlowResult
 
-# ── 한국 345kV 버스 이름 매핑 ─────────────────────────────────────────────────
-
-_BUS_NAMES: dict[str, str] = {
-    "B01": "신가평",
-    "B02": "양주",
-    "B03": "신용인",
-    "B04": "신안성",
-    "B05": "신평택",
-    "B06": "서울동",
-    "B07": "분당",
-    "B08": "동서울",
-    "B09": "수원",
-    "B10": "신시흥",
-    "B11": "인천북",
-    "B12": "신강남",
-    "B13": "신서울",
-}
-
-
 # ── 내부 헬퍼 ─────────────────────────────────────────────────────────────────
 
 def _congestion_status(util: float) -> str:
@@ -68,7 +49,7 @@ def compute_line_statuses(
     list[LineStatus]
         이용률 내림차순으로 정렬된 LineStatus 목록.
     """
-    names = bus_names if bus_names is not None else _BUS_NAMES
+    names = bus_names if bus_names is not None else {}
     line_statuses: list[LineStatus] = []
 
     for ln in dc_result.line_inputs:

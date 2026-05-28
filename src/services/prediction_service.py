@@ -2,12 +2,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Iterable
 
 import numpy as np
 import pandas as pd
 
+from src.data.grid_builder import DEFAULT_GRID_TOTAL_LOAD_MW
+from src.data.loaders import DEFAULT_GRID_CSV_DIR, load_grid_dataset_or_default
 from src.data.schemas import (
+    GridDataset,
+    GridNode,
+    GridPowerProfile,
     HourlyLoadPrediction,
+    InstallationPoint,
     PredictionResult,
     RiskLine,
     ScenarioContext,
@@ -18,44 +25,6 @@ from src.services.result_metadata import (
     build_no_fallback_info,
     build_source_warning,
 )
-
-# ── 13-노드 정의 ───────────────────────────────────────────────────────────────
-_BUSES: list[dict] = [
-    {"bus_id": "BUS_001", "name": "서울",  "peak_mw": 7000},
-    {"bus_id": "BUS_002", "name": "인천",  "peak_mw": 3500},
-    {"bus_id": "BUS_003", "name": "수원",  "peak_mw": 2500},
-    {"bus_id": "BUS_004", "name": "춘천",  "peak_mw": 1000},
-    {"bus_id": "BUS_005", "name": "강릉",  "peak_mw":  800},
-    {"bus_id": "BUS_006", "name": "원주",  "peak_mw": 1200},
-    {"bus_id": "BUS_007", "name": "대전",  "peak_mw": 3000},
-    {"bus_id": "BUS_008", "name": "청주",  "peak_mw": 1500},
-    {"bus_id": "BUS_009", "name": "광주",  "peak_mw": 2500},
-    {"bus_id": "BUS_010", "name": "전주",  "peak_mw": 1200},
-    {"bus_id": "BUS_011", "name": "대구",  "peak_mw": 3500},
-    {"bus_id": "BUS_012", "name": "울산",  "peak_mw": 2000},
-    {"bus_id": "BUS_013", "name": "부산",  "peak_mw": 4000},
-]
-
-# ── 선로 정의 (from, to, thermal_limit_mw) ────────────────────────────────────
-_LINES: list[dict] = [
-    {"line_id": "L01", "from": "BUS_001", "to": "BUS_002", "limit_mw": 3000},
-    {"line_id": "L02", "from": "BUS_001", "to": "BUS_003", "limit_mw": 2500},
-    {"line_id": "L03", "from": "BUS_001", "to": "BUS_004", "limit_mw": 1500},
-    {"line_id": "L04", "from": "BUS_001", "to": "BUS_007", "limit_mw": 3000},
-    {"line_id": "L05", "from": "BUS_002", "to": "BUS_003", "limit_mw": 2000},
-    {"line_id": "L06", "from": "BUS_004", "to": "BUS_005", "limit_mw": 1000},
-    {"line_id": "L07", "from": "BUS_004", "to": "BUS_006", "limit_mw": 1500},
-    {"line_id": "L08", "from": "BUS_006", "to": "BUS_007", "limit_mw": 2000},
-    {"line_id": "L09", "from": "BUS_007", "to": "BUS_008", "limit_mw": 2000},
-    {"line_id": "L10", "from": "BUS_007", "to": "BUS_009", "limit_mw": 2000},
-    {"line_id": "L11", "from": "BUS_008", "to": "BUS_010", "limit_mw": 1500},
-    {"line_id": "L12", "from": "BUS_009", "to": "BUS_010", "limit_mw": 1500},
-    {"line_id": "L13", "from": "BUS_010", "to": "BUS_011", "limit_mw": 2000},
-    {"line_id": "L14", "from": "BUS_011", "to": "BUS_012", "limit_mw": 4000},
-    {"line_id": "L15", "from": "BUS_011", "to": "BUS_013", "limit_mw": 3000},
-    {"line_id": "L16", "from": "BUS_012", "to": "BUS_013", "limit_mw": 3500},
-    {"line_id": "L17", "from": "BUS_007", "to": "BUS_011", "limit_mw": 2500},
-]
 
 
 def _hourly_factor(hour: int, day_of_week: int) -> float:
@@ -84,35 +53,27 @@ class PredictionService:
         hours: int = 72,
         load_scale: float = 1.0,
         rng_seed: int = 42,
+        grid_dataset: GridDataset | None = None,
+        user_installations: Iterable[InstallationPoint] | None = None,
     ) -> pd.DataFrame:
         """과거 hours 시간의 합성 부하 이력을 DataFrame 으로 반환한다.
 
         컬럼: timestamp, bus_id, bus_name, load_mw, generation_mw
         feature_builder.build_feature_vector() 의 load_df 입력 계약을 만족한다.
+        bus_id 컬럼명은 예측 엔진 호환을 위해 유지하지만 값은 새 Grid node_id다.
         """
-        rng = np.random.default_rng(rng_seed)
-        start_ts = end_ts - timedelta(hours=hours)
-        timestamps = [start_ts + timedelta(hours=h) for h in range(hours)]
-
-        rows: list[dict] = []
-        for ts in timestamps:
-            factor = _hourly_factor(ts.hour, ts.weekday())
-            for bus in _BUSES:
-                noise = float(rng.normal(0, 0.03))
-                load_mw = bus["peak_mw"] * load_scale * factor * (1 + noise)
-                gen_mw = (
-                    5000.0 * (1 + float(rng.normal(0, 0.015)))
-                    if bus["bus_id"] == "BUS_012"
-                    else 0.0
-                )
-                rows.append({
-                    "timestamp": ts,
-                    "bus_id": bus["bus_id"],
-                    "bus_name": bus["name"],
-                    "load_mw": round(max(0.0, load_mw), 1),
-                    "generation_mw": round(max(0.0, gen_mw), 1),
-                })
-        return pd.DataFrame(rows)
+        dataset = self._resolve_grid_dataset(
+            grid_dataset=grid_dataset,
+            user_installations=user_installations,
+            created_at=end_ts,
+        )
+        return self._generate_grid_load_history(
+            dataset=dataset,
+            end_ts=end_ts,
+            hours=hours,
+            load_scale=load_scale,
+            rng_seed=rng_seed,
+        )
 
     def run_mock_prediction(
         self,
@@ -120,6 +81,9 @@ class PredictionService:
         created_at: datetime | None = None,
         forecast_start: datetime | None = None,
         scenario: ScenarioContext | None = None,
+        grid_dataset: GridDataset | None = None,
+        grid_dir: str | None = str(DEFAULT_GRID_CSV_DIR),
+        user_installations: Iterable[InstallationPoint] | None = None,
     ) -> PredictionResult:
         """합성 패턴 기반 24시간 예측 결과를 반환한다.
 
@@ -133,8 +97,14 @@ class PredictionService:
             minute=0, second=0, microsecond=0
         )
         resolved_scenario = self._resolve_scenario(scenario, now)
-        predictions = self._generate_predictions(now, load_scale)
-        risk_lines = self._compute_risk_lines(predictions, load_scale)
+        dataset = self._resolve_grid_dataset(
+            grid_dataset=grid_dataset,
+            grid_dir=grid_dir,
+            user_installations=user_installations,
+            created_at=now,
+        )
+        predictions = self._generate_grid_predictions(now, load_scale, dataset)
+        risk_lines = self._compute_grid_risk_lines(predictions, load_scale, dataset)
         summary = self._build_summary(now, predictions, risk_lines)
 
         return PredictionResult(
@@ -151,8 +121,14 @@ class PredictionService:
             fallback=build_fallback_info(
                 mode="mock_data",
                 reason="실제 예측 모델 대신 PredictionService의 mock 패턴 예측 결과를 사용합니다.",
-                primary_path="src.engine.forecast.feature_builder -> baseline/lstm/gnn forecaster",
+                primary_path="GridDataset -> src.engine.forecast.feature_builder -> baseline/lstm/gnn forecaster",
                 active_path="src.services.prediction_service.PredictionService.run_mock_prediction",
+            ),
+            metadata=self._build_grid_metadata(
+                dataset,
+                prediction_nodes=self._prediction_nodes(dataset),
+                risk_lines=risk_lines,
+                graph_edge_source="GridLine",
             ),
         )
 
@@ -162,6 +138,9 @@ class PredictionService:
         load_scale: float = 1.0,
         forecast_start: datetime | None = None,
         scenario: ScenarioContext | None = None,
+        grid_dataset: GridDataset | None = None,
+        grid_dir: str | None = str(DEFAULT_GRID_CSV_DIR),
+        user_installations: Iterable[InstallationPoint] | None = None,
     ) -> PredictionResult:
         """KPX 실데이터 기반 baseline 예측 결과를 반환한다.
 
@@ -171,9 +150,13 @@ class PredictionService:
         load_scale     : 부하 배율
         forecast_start : 예측 기준 시각 (None 이면 현재 시각)
         """
-        from src.data.adapters.public_data_adapter import load_kpx_csvs
-
-        load_df = load_kpx_csvs(raw_dir)
+        dataset = self._resolve_grid_dataset(
+            grid_dataset=grid_dataset,
+            grid_dir=grid_dir,
+            user_installations=user_installations,
+            created_at=forecast_start,
+        )
+        load_df = self._load_grid_history(raw_dir, dataset)
         now = self._resolve_forecast_start(load_df, forecast_start)
         resolved_scenario = self._resolve_scenario(scenario, now)
 
@@ -190,6 +173,11 @@ class PredictionService:
             predictions=predictions,
             source="baseline",
             warnings=[],
+            grid_dataset=dataset,
+            metadata={
+                "history_source": "KPX CSV redistributed to GridNode",
+                "legacy_bus_source": False,
+            },
         )
 
     def run_lstm_prediction(
@@ -200,6 +188,9 @@ class PredictionService:
         scenario: ScenarioContext | None = None,
         retrain: bool = False,
         epochs: int = 20,
+        grid_dataset: GridDataset | None = None,
+        grid_dir: str | None = str(DEFAULT_GRID_CSV_DIR),
+        user_installations: Iterable[InstallationPoint] | None = None,
     ) -> PredictionResult:
         """LSTM 학습/추론 기반 24시간 예측 결과를 반환한다.
 
@@ -211,7 +202,13 @@ class PredictionService:
         retrain        : True 이면 저장된 모델 무시하고 재학습
         epochs         : 재학습 시 에포크 수
         """
-        load_df = self._load_weather_history(raw_dir)
+        dataset = self._resolve_grid_dataset(
+            grid_dataset=grid_dataset,
+            grid_dir=grid_dir,
+            user_installations=user_installations,
+            created_at=forecast_start,
+        )
+        load_df = self._load_grid_history(raw_dir, dataset)
         data_end = load_df["timestamp"].max().replace(minute=0, second=0, microsecond=0)
         now = (forecast_start or data_end).replace(minute=0, second=0, microsecond=0)
         if now > data_end:
@@ -222,14 +219,43 @@ class PredictionService:
             load_df=history_df,
             forecast_start=now,
         )
-        predictions, warnings = self._predict_lstm(
-            training_df=load_df,
-            history_df=history_df,
-            forecast_start=now,
-            target_features=target_features,
-            retrain=retrain,
-            epochs=epochs,
-        )
+        try:
+            predictions, warnings = self._predict_lstm(
+                training_df=load_df,
+                history_df=history_df,
+                forecast_start=now,
+                target_features=target_features,
+                retrain=retrain,
+                epochs=epochs,
+            )
+        except Exception as exc:  # noqa: BLE001
+            baseline_result = self.run_baseline_prediction(
+                raw_dir=raw_dir,
+                load_scale=load_scale,
+                forecast_start=now,
+                scenario=resolved_scenario,
+                grid_dataset=dataset,
+                grid_dir=grid_dir,
+                user_installations=user_installations,
+            )
+            baseline_result.summary = (
+                "LSTM 예측 실패로 baseline 결과를 사용합니다. "
+                f"{baseline_result.summary}"
+            )
+            baseline_result.warnings = [
+                build_fallback_warning("PredictionService", "baseline_model"),
+                f"LSTM 실패: {_summarize_prediction_error(exc)}",
+                *baseline_result.warnings,
+            ]
+            baseline_result.fallback = build_fallback_info(
+                mode="baseline_model",
+                reason="Grid node_id 기준 LSTM 예측이 실패해 baseline 예측으로 전환했습니다.",
+                primary_path="src.engine.forecast.lstm_forecaster",
+                active_path="src.services.prediction_service.PredictionService.run_baseline_prediction",
+            )
+            baseline_result.metadata["lstm_fallback_error"] = _summarize_prediction_error(exc)
+            baseline_result.metadata["requires_lstm_retrain_for_grid_nodes"] = True
+            return baseline_result
 
         return self._build_prediction_result(
             scenario=resolved_scenario,
@@ -238,6 +264,12 @@ class PredictionService:
             predictions=predictions,
             source="lstm",
             warnings=warnings,
+            grid_dataset=dataset,
+            metadata={
+                "history_source": "KPX CSV redistributed to GridNode",
+                "legacy_bus_source": False,
+                "requires_lstm_retrain_for_grid_nodes": retrain,
+            },
         )
 
     def run_gnn_prediction(
@@ -246,9 +278,18 @@ class PredictionService:
         load_scale: float = 1.0,
         forecast_start: datetime | None = None,
         scenario: ScenarioContext | None = None,
+        grid_dataset: GridDataset | None = None,
+        grid_dir: str | None = str(DEFAULT_GRID_CSV_DIR),
+        user_installations: Iterable[InstallationPoint] | None = None,
     ) -> PredictionResult:
         """그래프 기반 최소 GNN 예측 결과를 반환한다."""
-        load_df = self._load_weather_history(raw_dir)
+        dataset = self._resolve_grid_dataset(
+            grid_dataset=grid_dataset,
+            grid_dir=grid_dir,
+            user_installations=user_installations,
+            created_at=forecast_start,
+        )
+        load_df = self._load_grid_history(raw_dir, dataset)
         now = self._resolve_forecast_start(load_df, forecast_start)
         resolved_scenario = self._resolve_scenario(scenario, now)
 
@@ -261,6 +302,7 @@ class PredictionService:
             history_df=history_df,
             forecast_start=now,
             target_features=target_features,
+            grid_dataset=dataset,
         )
 
         return self._build_prediction_result(
@@ -270,6 +312,12 @@ class PredictionService:
             predictions=predictions,
             source="gnn",
             warnings=[],
+            grid_dataset=dataset,
+            metadata={
+                "history_source": "KPX CSV redistributed to GridNode",
+                "graph_edge_source": "GridLine",
+                "legacy_bus_source": False,
+            },
         )
 
     def run_hybrid_prediction(
@@ -280,9 +328,18 @@ class PredictionService:
         scenario: ScenarioContext | None = None,
         retrain: bool = False,
         epochs: int = 20,
+        grid_dataset: GridDataset | None = None,
+        grid_dir: str | None = str(DEFAULT_GRID_CSV_DIR),
+        user_installations: Iterable[InstallationPoint] | None = None,
     ) -> PredictionResult:
         """LSTM + GNN 병렬 조합 예측을 반환하고 실패 시 baseline 으로 전환한다."""
-        load_df = self._load_weather_history(raw_dir)
+        dataset = self._resolve_grid_dataset(
+            grid_dataset=grid_dataset,
+            grid_dir=grid_dir,
+            user_installations=user_installations,
+            created_at=forecast_start,
+        )
+        load_df = self._load_grid_history(raw_dir, dataset)
         now = self._resolve_forecast_start(load_df, forecast_start)
         resolved_scenario = self._resolve_scenario(scenario, now)
         history_df = self._apply_load_scale(load_df, load_scale)
@@ -313,6 +370,7 @@ class PredictionService:
                 history_df=history_df,
                 forecast_start=now,
                 target_features=target_features,
+                grid_dataset=dataset,
             )
         except Exception as exc:  # noqa: BLE001
             branch_errors.append(f"GNN 실패: {_summarize_prediction_error(exc)}")
@@ -337,6 +395,12 @@ class PredictionService:
                 predictions=predictions,
                 source="hybrid",
                 warnings=warnings,
+                grid_dataset=dataset,
+                metadata={
+                    "history_source": "KPX CSV redistributed to GridNode",
+                    "graph_edge_source": "GridLine",
+                    "legacy_bus_source": False,
+                },
             )
 
         baseline_result = self.run_baseline_prediction(
@@ -344,6 +408,9 @@ class PredictionService:
             load_scale=load_scale,
             forecast_start=now,
             scenario=resolved_scenario,
+            grid_dataset=dataset,
+            grid_dir=grid_dir,
+            user_installations=user_installations,
         )
         baseline_result.summary = (
             "LSTM+GNN 병렬 예측 실패로 baseline 결과를 사용합니다. "
@@ -364,79 +431,269 @@ class PredictionService:
 
     # ── 내부 ──────────────────────────────────────────────────────────────────
 
-    def _generate_predictions(
-        self, now: datetime, load_scale: float
+    def _resolve_grid_dataset(
+        self,
+        *,
+        grid_dataset: GridDataset | None = None,
+        grid_dir: str | None = str(DEFAULT_GRID_CSV_DIR),
+        user_installations: Iterable[InstallationPoint] | None = None,
+        created_at: datetime | None = None,
+    ) -> GridDataset:
+        if grid_dataset is not None:
+            return grid_dataset
+        return load_grid_dataset_or_default(
+            grid_dir,
+            user_installations=user_installations,
+            created_at=created_at,
+            load_scale=1.0,
+            total_load_mw=DEFAULT_GRID_TOTAL_LOAD_MW,
+        )
+
+    def _prediction_nodes(self, dataset: GridDataset) -> list[GridNode]:
+        profile_by_node_id = self._profile_by_node_id(dataset)
+        load_nodes = [
+            node
+            for node in dataset.nodes
+            if (
+                max(0.0, node.base_load_mw) > 0.0
+                or profile_by_node_id.get(node.node_id, GridPowerProfile(node.node_id)).load_mw > 0.0
+            )
+        ]
+        if load_nodes:
+            return sorted(load_nodes, key=lambda node: node.node_id)
+        return sorted(dataset.nodes, key=lambda node: node.node_id)
+
+    def _profile_by_node_id(self, dataset: GridDataset) -> dict[str, GridPowerProfile]:
+        return {
+            profile.node_id: profile
+            for profile in dataset.power_profiles
+        }
+
+    def _node_name_map(self, dataset: GridDataset) -> dict[str, str]:
+        return {
+            node.node_id: node.node_name
+            for node in dataset.nodes
+        }
+
+    def _load_grid_history(
+        self,
+        raw_dir: str,
+        dataset: GridDataset,
+    ) -> pd.DataFrame:
+        from src.data.adapters.public_data_adapter import load_kpx_national_hourly
+
+        national_df = load_kpx_national_hourly(raw_dir)
+        return self._redistribute_kpx_history_to_grid(national_df, dataset)
+
+    def _redistribute_kpx_history_to_grid(
+        self,
+        national_df: pd.DataFrame,
+        dataset: GridDataset,
+    ) -> pd.DataFrame:
+        if national_df.empty:
+            raise ValueError("KPX 부하 이력이 비어 있습니다.")
+
+        df = national_df.copy()
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        if "demand_mw" in df.columns:
+            national = (
+                df.groupby("timestamp", as_index=False)
+                .agg(load_mw=("demand_mw", "mean"))
+                .sort_values("timestamp")
+            )
+        elif "load_mw" in df.columns:
+            national = (
+                df.groupby("timestamp", as_index=False)
+                .agg(load_mw=("load_mw", "sum"))
+                .sort_values("timestamp")
+            )
+        else:
+            raise ValueError("KPX 이력에는 demand_mw 또는 load_mw 컬럼이 필요합니다.")
+        median_load = float(national["load_mw"].median())
+        scale_to_grid = DEFAULT_GRID_TOTAL_LOAD_MW / median_load if median_load > 0.0 else 1.0
+        prediction_nodes = self._prediction_nodes(dataset)
+        weights = _prediction_node_load_weights(dataset, prediction_nodes)
+        profiles = self._profile_by_node_id(dataset)
+        rows: list[dict] = []
+
+        for _, row in national.iterrows():
+            grid_total_load = max(0.0, float(row["load_mw"]) * scale_to_grid)
+            for node in prediction_nodes:
+                profile = profiles.get(node.node_id)
+                rows.append(
+                    {
+                        "timestamp": row["timestamp"],
+                        "bus_id": node.node_id,
+                        "bus_name": node.node_name,
+                        "load_mw": round(grid_total_load * weights[node.node_id], 1),
+                        "generation_mw": round(profile.generation_mw if profile else 0.0, 1),
+                    }
+                )
+
+        history = pd.DataFrame(rows)
+        history.attrs["grid_load_scale_to_default_total"] = scale_to_grid
+        return history
+
+    def _generate_grid_load_history(
+        self,
+        *,
+        dataset: GridDataset,
+        end_ts: datetime,
+        hours: int = 72,
+        load_scale: float = 1.0,
+        rng_seed: int = 42,
+    ) -> pd.DataFrame:
+        rng = np.random.default_rng(rng_seed)
+        start_ts = end_ts - timedelta(hours=hours)
+        timestamps = [start_ts + timedelta(hours=h) for h in range(hours)]
+        prediction_nodes = self._prediction_nodes(dataset)
+        profiles = self._profile_by_node_id(dataset)
+        weights = _prediction_node_load_weights(dataset, prediction_nodes)
+
+        rows: list[dict] = []
+        for ts in timestamps:
+            factor = _hourly_factor(ts.hour, ts.weekday())
+            total_load_mw = DEFAULT_GRID_TOTAL_LOAD_MW * load_scale * factor
+            for node in prediction_nodes:
+                profile = profiles.get(node.node_id)
+                noise = float(rng.normal(0, 0.025))
+                load_mw = total_load_mw * weights[node.node_id] * (1 + noise)
+                rows.append(
+                    {
+                        "timestamp": ts,
+                        "bus_id": node.node_id,
+                        "bus_name": node.node_name,
+                        "load_mw": round(max(0.0, load_mw), 1),
+                        "generation_mw": round(profile.generation_mw if profile else 0.0, 1),
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    def _generate_grid_predictions(
+        self,
+        now: datetime,
+        load_scale: float,
+        dataset: GridDataset,
     ) -> list[HourlyLoadPrediction]:
         rng = np.random.default_rng(seed=7)
+        prediction_nodes = self._prediction_nodes(dataset)
+        weights = _prediction_node_load_weights(dataset, prediction_nodes)
         predictions: list[HourlyLoadPrediction] = []
+
         for h in range(1, 25):
             ts = now + timedelta(hours=h)
             factor = _hourly_factor(ts.hour, ts.weekday())
-            for bus in _BUSES:
-                noise = float(rng.normal(0, 0.025))
-                pred = bus["peak_mw"] * load_scale * factor * (1 + noise)
-                ci = pred * 0.08  # ±8% 신뢰구간
-                predictions.append(HourlyLoadPrediction(
-                    timestamp=ts,
-                    bus_id=bus["bus_id"],
-                    predicted_load_mw=round(max(0.0, pred), 1),
-                    confidence_lower_mw=round(max(0.0, pred - ci), 1),
-                    confidence_upper_mw=round(pred + ci, 1),
-                ))
+            total_load_mw = DEFAULT_GRID_TOTAL_LOAD_MW * load_scale * factor
+            for node in prediction_nodes:
+                noise = float(rng.normal(0, 0.022))
+                pred = total_load_mw * weights[node.node_id] * (1 + noise)
+                ci = pred * 0.08
+                predictions.append(
+                    HourlyLoadPrediction(
+                        timestamp=ts,
+                        bus_id=node.node_id,
+                        predicted_load_mw=round(max(0.0, pred), 1),
+                        confidence_lower_mw=round(max(0.0, pred - ci), 1),
+                        confidence_upper_mw=round(pred + ci, 1),
+                    )
+                )
         return predictions
 
-    def _compute_risk_lines(
+    def _compute_grid_risk_lines(
         self,
         predictions: list[HourlyLoadPrediction],
         load_scale: float,
+        dataset: GridDataset,
     ) -> list[RiskLine]:
-        """선로별 예측 이용률을 계산하고 위험도를 분류한다.
-
-        흐름 근사: |from_load - to_load| × 0.40
-        (2주차에 DC Power Flow 결과로 교체 예정)
-        """
-        bus_name = {b["bus_id"]: b["name"] for b in _BUSES}
-
-        # timestamp 기준으로 인덱싱 — (timestamp, bus_id) → load_mw
-        load_map: dict[tuple, float] = {
+        node_name = self._node_name_map(dataset)
+        load_map: dict[tuple[datetime, str], float] = {
             (p.timestamp, p.bus_id): p.predicted_load_mw
             for p in predictions
         }
         timestamps = sorted({p.timestamp for p in predictions})
-
         risk_lines: list[RiskLine] = []
-        for line in _LINES:
-            fbus, tbus, limit = line["from"], line["to"], line["limit_mw"]
 
-            peak_util, peak_ts = 0.0, timestamps[0] if timestamps else None
+        for line in dataset.lines:
+            if line.status == "out_of_service":
+                continue
+            peak_util = 0.0
+            peak_ts = timestamps[0] if timestamps else None
             for ts in timestamps:
-                f_load = load_map.get((ts, fbus), 0.0)
-                t_load = load_map.get((ts, tbus), 0.0)
-                util = abs(f_load - t_load) * 0.40 / limit
-                if util > peak_util:
-                    peak_util, peak_ts = util, ts
+                from_load = load_map.get((ts, line.from_node_id), 0.0)
+                to_load = load_map.get((ts, line.to_node_id), 0.0)
+                flow = _estimate_grid_line_flow_mw(from_load, to_load)
+                utilization = flow / line.capacity_mw if line.capacity_mw > 0.0 else 0.0
+                if utilization > peak_util:
+                    peak_util = utilization
+                    peak_ts = ts
 
             level = _classify_risk(peak_util)
             if level == "low":
                 continue
 
             peak_h = peak_ts.hour if peak_ts is not None else 0
-            risk_lines.append(RiskLine(
-                line_id=line["line_id"],
-                from_bus=fbus,
-                to_bus=tbus,
-                from_bus_name=bus_name[fbus],
-                to_bus_name=bus_name[tbus],
-                peak_risk_hour=peak_h,
-                predicted_utilization=round(peak_util, 3),
-                risk_level=level,
-                explanation=_build_explanation(
-                    line["line_id"], bus_name[fbus], bus_name[tbus],
-                    peak_util, peak_h, level, load_scale,
-                ),
-            ))
+            from_name = node_name.get(line.from_node_id, line.from_node_id)
+            to_name = node_name.get(line.to_node_id, line.to_node_id)
+            risk_lines.append(
+                RiskLine(
+                    line_id=line.line_id,
+                    from_bus=line.from_node_id,
+                    to_bus=line.to_node_id,
+                    from_bus_name=from_name,
+                    to_bus_name=to_name,
+                    peak_risk_hour=peak_h,
+                    predicted_utilization=round(peak_util, 3),
+                    risk_level=level,
+                    explanation=_build_explanation(
+                        line.line_id,
+                        from_name,
+                        to_name,
+                        peak_util,
+                        peak_h,
+                        level,
+                        load_scale,
+                    ),
+                )
+            )
 
         return sorted(risk_lines, key=lambda r: r.predicted_utilization, reverse=True)
+
+    def _grid_graph_edges(self, dataset: GridDataset) -> list[tuple[str, str]]:
+        return [
+            (line.from_node_id, line.to_node_id)
+            for line in dataset.lines
+            if line.status != "out_of_service"
+        ]
+
+    def _build_grid_metadata(
+        self,
+        dataset: GridDataset,
+        *,
+        prediction_nodes: list[GridNode],
+        risk_lines: list[RiskLine],
+        graph_edge_source: str,
+        extra: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        metadata: dict[str, object] = {
+            "grid_dataset": dataset,
+            "grid_source": dataset.source,
+            "grid_stage": dataset.metadata.get("grid_stage", ""),
+            "prediction_node_ids": [node.node_id for node in prediction_nodes],
+            "prediction_node_count": len(prediction_nodes),
+            "prediction_line_ids": [line.line_id for line in dataset.lines],
+            "prediction_line_count": len(dataset.lines),
+            "risk_line_ids": [line.line_id for line in risk_lines],
+            "graph_edge_source": graph_edge_source,
+            "graph_edge_count": len(self._grid_graph_edges(dataset)),
+            "legacy_bus_source": False,
+            "bus_id_field_semantics": "GridNode.node_id",
+        }
+        if dataset.fallback.enabled:
+            metadata["grid_loader_fallback_mode"] = dataset.fallback.mode
+            metadata["grid_loader_fallback_reason"] = dataset.fallback.reason
+        if extra:
+            metadata.update(extra)
+        return metadata
 
     def _build_summary(
         self,
@@ -502,8 +759,30 @@ class PredictionService:
         predictions: list[HourlyLoadPrediction],
         source: str,
         warnings: list[str],
+        grid_dataset: GridDataset | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> PredictionResult:
-        risk_lines = self._compute_risk_lines(predictions, load_scale)
+        dataset = grid_dataset or self._resolve_grid_dataset(created_at=created_at)
+        risk_lines = self._compute_grid_risk_lines(predictions, load_scale, dataset)
+        prediction_nodes = self._prediction_nodes(dataset)
+        resolved_metadata = dict(metadata or {})
+        if grid_dataset is None:
+            resolved_metadata.setdefault(
+                "grid_dataset_inferred_for_risk",
+                True,
+            )
+            resolved_metadata.setdefault(
+                "history_prediction_id_source",
+                "external_prediction_list",
+            )
+
+        result_metadata = self._build_grid_metadata(
+            dataset,
+            prediction_nodes=prediction_nodes,
+            risk_lines=risk_lines,
+            graph_edge_source=str(resolved_metadata.get("graph_edge_source", "GridLine")),
+            extra=resolved_metadata,
+        )
         summary = self._build_summary(created_at, predictions, risk_lines)
         source_warning = build_source_warning("PredictionService", source)
         result_warnings = list(warnings)
@@ -521,6 +800,7 @@ class PredictionService:
             scenario=scenario,
             warnings=result_warnings,
             fallback=build_no_fallback_info(),
+            metadata=result_metadata,
         )
 
     def _resolve_forecast_start(
@@ -636,12 +916,16 @@ class PredictionService:
         history_df: pd.DataFrame,
         forecast_start: datetime,
         target_features: list,
+        grid_dataset: GridDataset | None = None,
     ) -> list[HourlyLoadPrediction]:
         from src.engine.forecast.gnn_forecaster import GNNForecaster
 
         return (
             GNNForecaster()
-            .fit(history_df)
+            .fit(
+                history_df,
+                graph_edges=self._grid_graph_edges(grid_dataset) if grid_dataset is not None else None,
+            )
             .predict(
                 history_df=history_df,
                 forecast_start=forecast_start,
@@ -651,6 +935,45 @@ class PredictionService:
 
 
 # ── 순수 함수 ──────────────────────────────────────────────────────────────────
+
+def _prediction_node_load_weights(
+    dataset: GridDataset,
+    prediction_nodes: list[GridNode],
+) -> dict[str, float]:
+    if not prediction_nodes:
+        return {}
+    profile_by_node_id = {
+        profile.node_id: profile
+        for profile in dataset.power_profiles
+    }
+    raw_weights: dict[str, float] = {}
+    for node in prediction_nodes:
+        profile = profile_by_node_id.get(node.node_id)
+        raw_weight = (
+            profile.load_weight
+            if profile is not None and profile.load_weight > 0.0
+            else max(0.0, node.base_load_mw)
+        )
+        raw_weights[node.node_id] = float(raw_weight)
+
+    total_weight = sum(raw_weights.values())
+    if total_weight <= 0.0:
+        equal_weight = 1.0 / len(prediction_nodes)
+        return {
+            node.node_id: equal_weight
+            for node in prediction_nodes
+        }
+    return {
+        node_id: weight / total_weight
+        for node_id, weight in raw_weights.items()
+    }
+
+
+def _estimate_grid_line_flow_mw(from_load_mw: float, to_load_mw: float) -> float:
+    endpoint_pressure = max(0.0, from_load_mw, to_load_mw)
+    imbalance = abs(from_load_mw - to_load_mw)
+    return (endpoint_pressure * 0.95) + (imbalance * 0.20)
+
 
 def _classify_risk(utilization: float) -> str:
     if utilization >= 0.90:

@@ -8,6 +8,7 @@ import streamlit as st
 
 from src.config.settings import settings
 from src.data.adapters.vworld_adapter import MapCapability, get_map_capability
+from src.data.loaders import load_grid_dataset_or_default
 from src.data.schemas import (
     InstallationMode,
     InstallationPoint,
@@ -88,7 +89,6 @@ def main() -> None:
     scenario = render_scenario_sidebar()
     map_capability = get_map_capability(prefer_webgl=False)
     st.session_state.sgop_landing_has_vworld_tiles = bool(map_capability.wmts_tile_url)
-    service_overlay, overlay_warning = _get_service_overlay(scenario, map_capability)
 
     selected_kind, mode, name, capacity_mw, voltage_kv, notes = _render_left_panel()
     selected_point = st.session_state.get("sgop_landing_last_click")
@@ -128,14 +128,22 @@ def main() -> None:
     summary_cols[2].metric("기본 송전탑", f"{len(_DEFAULT_TRANSMISSION_TOWERS)}개")
     summary_cols[3].metric("좌표계", "EPSG:4326")
 
-    overlay_points = _build_landing_points(service_overlay)
+    grid_overlay, grid_warning = _get_grid_overlay(scenario, map_capability)
+    service_overlay, overlay_warning = _get_service_overlay(scenario, map_capability)
+    overlay_points = _build_landing_points(grid_overlay, service_overlay)
+    overlay_lines = grid_overlay.lines if grid_overlay is not None else []
     overlay_routes = service_overlay.routes if service_overlay is not None else []
     landing_overlay = MapOverlayService().build_landing_overlay(
         scenario=scenario,
         created_at=scenario.created_at or datetime.now().replace(minute=0, second=0, microsecond=0),
         points=overlay_points,
+        lines=overlay_lines,
         routes=overlay_routes,
-        warnings=[overlay_warning] if overlay_warning else [],
+        warnings=[
+            warning
+            for warning in [grid_warning, overlay_warning]
+            if warning
+        ],
         map_capability=map_capability,
     )
 
@@ -403,14 +411,92 @@ def _get_service_overlay(
         return None, warning
 
 
-def _build_landing_points(service_overlay: MapOverlayResult | None) -> list[MapOverlayPoint]:
-    points = _build_mock_grid_points()
-    if service_overlay is not None:
-        points.extend(service_overlay.points)
-    points.extend(
-        _installation_to_overlay_point(installation)
-        for installation in st.session_state.sgop_landing_installations
+def _get_grid_overlay(
+    scenario: ScenarioContext,
+    map_capability: MapCapability,
+) -> tuple[MapOverlayResult | None, str]:
+    installations = _landing_installations()
+    cache_key = (
+        scenario.scenario_id,
+        scenario.created_at.isoformat() if scenario.created_at is not None else "",
+        map_capability.rendering_mode,
+        map_capability.vworld_available,
+        _installations_cache_key(installations),
     )
+    cached = st.session_state.get("sgop_landing_grid_overlay")
+    if isinstance(cached, tuple) and len(cached) == 3 and cached[0] == cache_key:
+        return cached[1], cached[2]
+
+    try:
+        created_at = scenario.created_at or datetime.now().replace(minute=0, second=0, microsecond=0)
+        dataset = load_grid_dataset_or_default(
+            user_installations=installations,
+            created_at=created_at,
+        )
+        overlay = MapOverlayService().build_grid_overlay(
+            dataset,
+            scenario=scenario,
+            created_at=created_at,
+            map_capability=map_capability,
+        )
+        st.session_state.sgop_landing_grid_overlay = (cache_key, overlay, "")
+        return overlay, ""
+    except Exception as exc:  # noqa: BLE001
+        warning = f"Grid overlay를 만들지 못해 기본 지도 지점만 표시합니다. 원인: {exc}"
+        fallback_overlay = MapOverlayService().build_landing_overlay(
+            scenario=scenario,
+            created_at=scenario.created_at or datetime.now().replace(minute=0, second=0, microsecond=0),
+            points=_build_mock_grid_points(),
+            warnings=[warning],
+            map_capability=map_capability,
+        )
+        st.session_state.sgop_landing_grid_overlay = (cache_key, fallback_overlay, warning)
+        return fallback_overlay, warning
+
+
+def _landing_installations() -> list[InstallationPoint]:
+    return [
+        installation
+        for installation in st.session_state.get("sgop_landing_installations", [])
+        if isinstance(installation, InstallationPoint)
+    ]
+
+
+def _installations_cache_key(installations: list[InstallationPoint]) -> tuple[tuple[object, ...], ...]:
+    return tuple(
+        (
+            installation.installation_id,
+            installation.label,
+            installation.kind,
+            installation.mode,
+            round(installation.latitude, 8),
+            round(installation.longitude, 8),
+            installation.capacity_mw,
+            installation.voltage_kv,
+            installation.notes,
+        )
+        for installation in installations
+    )
+
+
+def _build_landing_points(
+    grid_overlay: MapOverlayResult | None,
+    service_overlay: MapOverlayResult | None,
+) -> list[MapOverlayPoint]:
+    points = list(grid_overlay.points) if grid_overlay is not None else _build_mock_grid_points()
+    grid_node_ids = {
+        str(point.metadata.get("node_id"))
+        for point in points
+        if point.metadata.get("node_id")
+    }
+    if service_overlay is not None:
+        points.extend(
+            point
+            for point in service_overlay.points
+            if point.kind in {"tower_candidate", "route_point"}
+            and str(point.metadata.get("candidate_id") or point.metadata.get("point_id") or "")
+            not in grid_node_ids
+        )
     return _dedupe_points(points)
 
 

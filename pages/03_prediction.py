@@ -8,11 +8,13 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.data.adapters.vworld_adapter import get_map_capability
-from src.data.schemas import PredictionResult, ScenarioContext
+from src.data.loaders import load_grid_dataset_or_default
+from src.data.schemas import GridDataset, GridNode, PredictionResult, ScenarioContext
 from src.services.map_overlay_service import MapOverlayService
 from src.services.prediction_service import PredictionService
 from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay
 from src.ui.scenario_controls import (
+    LANDING_INSTALLATIONS_KEY,
     PAGE_STATE_RESTORE_PENDING_KEY,
     PREDICTION_EPOCHS_KEY,
     PREDICTION_LOAD_SCALE_KEY,
@@ -31,14 +33,6 @@ st.set_page_config(
 )
 
 # ── 상수 ──────────────────────────────────────────────────────────────────────
-_ALL_BUSES = [
-    ("BUS_001", "서울"), ("BUS_002", "인천"), ("BUS_003", "수원"),
-    ("BUS_004", "춘천"), ("BUS_005", "강릉"), ("BUS_006", "원주"),
-    ("BUS_007", "대전"), ("BUS_008", "청주"), ("BUS_009", "광주"),
-    ("BUS_010", "전주"), ("BUS_011", "대구"), ("BUS_012", "울산"),
-    ("BUS_013", "부산"),
-]
-_DEFAULT_BUSES = ["BUS_001", "BUS_007", "BUS_011", "BUS_013"]
 _MODEL_OPTIONS = ["Mock", "Baseline", "LSTM", "GNN", "LSTM+GNN"]
 _SELECTED_BUS_NAMES_KEY = "prediction_selected_bus_names"
 
@@ -47,6 +41,39 @@ _RISK_COLOR = {
     "high":     "#e67e22",
     "medium":   "#f1c40f",
 }
+
+
+def _prediction_nodes(dataset: GridDataset) -> list[GridNode]:
+    profile_by_node_id = {
+        profile.node_id: profile
+        for profile in dataset.power_profiles
+    }
+    nodes = [
+        node
+        for node in dataset.nodes
+        if (
+            node.base_load_mw > 0.0
+            or profile_by_node_id.get(node.node_id) is not None
+            and profile_by_node_id[node.node_id].load_mw > 0.0
+        )
+    ]
+    return sorted(nodes or list(dataset.nodes), key=lambda node: node.node_id)
+
+
+def _default_prediction_node_ids(dataset: GridDataset, limit: int = 4) -> list[str]:
+    profile_by_node_id = {
+        profile.node_id: profile
+        for profile in dataset.power_profiles
+    }
+    nodes = _prediction_nodes(dataset)
+    ranked_nodes = sorted(
+        nodes,
+        key=lambda node: (
+            profile_by_node_id.get(node.node_id).load_mw if profile_by_node_id.get(node.node_id) else node.base_load_mw
+        ),
+        reverse=True,
+    )
+    return [node.node_id for node in ranked_nodes[:limit]]
 _RISK_LABEL = {
     "critical": "🔴 위험",
     "high":     "🟠 경고",
@@ -61,6 +88,7 @@ def _run_prediction_with_fallback(
     raw_dir: str,
     load_scale: float,
     scenario: ScenarioContext,
+    grid_dataset: GridDataset,
     retrain: bool = False,
     epochs: int = 20,
 ) -> PredictionResult:
@@ -68,6 +96,7 @@ def _run_prediction_with_fallback(
         return svc.run_mock_prediction(
             load_scale=load_scale,
             scenario=scenario,
+            grid_dataset=grid_dataset,
         )
 
     try:
@@ -76,12 +105,14 @@ def _run_prediction_with_fallback(
                 raw_dir=raw_dir,
                 load_scale=load_scale,
                 scenario=scenario,
+                grid_dataset=grid_dataset,
             )
         if model_source == "GNN":
             return svc.run_gnn_prediction(
                 raw_dir=raw_dir,
                 load_scale=load_scale,
                 scenario=scenario,
+                grid_dataset=grid_dataset,
             )
         if model_source == "LSTM+GNN":
             return svc.run_hybrid_prediction(
@@ -91,6 +122,7 @@ def _run_prediction_with_fallback(
                 scenario=scenario,
                 retrain=retrain,
                 epochs=epochs,
+                grid_dataset=grid_dataset,
             )
 
         return svc.run_lstm_prediction(
@@ -100,11 +132,13 @@ def _run_prediction_with_fallback(
             scenario=scenario,
             retrain=retrain,
             epochs=epochs,
+            grid_dataset=grid_dataset,
         )
     except Exception as exc:  # noqa: BLE001
         fallback_result = svc.run_mock_prediction(
             load_scale=load_scale,
             scenario=scenario,
+            grid_dataset=grid_dataset,
         )
         fallback_result.summary = (
             f"{model_source} 예측 실패로 mock 결과를 사용합니다. "
@@ -149,9 +183,27 @@ _RAW_DIR = str(
 )
 
 shared_scenario = render_scenario_sidebar()
-bus_id_to_name = {bid: name for bid, name in _ALL_BUSES}
-bus_name_to_id = {name: bid for bid, name in _ALL_BUSES}
-default_names = [name for bid, name in _ALL_BUSES if bid in _DEFAULT_BUSES]
+page_grid_dataset = load_grid_dataset_or_default(
+    user_installations=st.session_state.get(LANDING_INSTALLATIONS_KEY, []),
+    created_at=shared_scenario.created_at,
+    load_scale=1.0,
+)
+prediction_nodes = _prediction_nodes(page_grid_dataset)
+node_id_to_name = {node.node_id: node.node_name for node in prediction_nodes}
+node_label_to_id = {
+    f"{node.node_name} ({node.node_id})": node.node_id
+    for node in prediction_nodes
+}
+node_id_to_label = {
+    node_id: label
+    for label, node_id in node_label_to_id.items()
+}
+default_node_ids = _default_prediction_node_ids(page_grid_dataset)
+default_labels = [
+    node_id_to_label[node_id]
+    for node_id in default_node_ids
+    if node_id in node_id_to_label
+]
 
 if st.session_state.get(PREDICTION_MODEL_SOURCE_KEY) not in _MODEL_OPTIONS:
     st.session_state[PREDICTION_MODEL_SOURCE_KEY] = "Mock"
@@ -181,14 +233,20 @@ else:
 restore_pending = bool(st.session_state.pop(PAGE_STATE_RESTORE_PENDING_KEY, False))
 stored_bus_ids = st.session_state.get(PREDICTION_SELECTED_BUS_IDS_KEY)
 if restore_pending and isinstance(stored_bus_ids, list):
-    restored_names = [
-        bus_id_to_name[bus_id]
-        for bus_id in stored_bus_ids
-        if bus_id in bus_id_to_name
+    restored_labels = [
+        node_id_to_label[node_id]
+        for node_id in stored_bus_ids
+        if node_id in node_id_to_label
     ]
-    st.session_state[_SELECTED_BUS_NAMES_KEY] = restored_names or list(default_names)
+    st.session_state[_SELECTED_BUS_NAMES_KEY] = restored_labels or list(default_labels)
 elif _SELECTED_BUS_NAMES_KEY not in st.session_state:
-    st.session_state[_SELECTED_BUS_NAMES_KEY] = list(default_names)
+    st.session_state[_SELECTED_BUS_NAMES_KEY] = list(default_labels)
+else:
+    st.session_state[_SELECTED_BUS_NAMES_KEY] = [
+        label
+        for label in st.session_state[_SELECTED_BUS_NAMES_KEY]
+        if label in node_label_to_id
+    ] or list(default_labels)
 
 # ── 사이드바 ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -232,10 +290,10 @@ with st.sidebar:
 
     selected_names = st.multiselect(
         "그래프에 표시할 노드",
-        options=list(bus_name_to_id.keys()),
+        options=list(node_label_to_id.keys()),
         key=_SELECTED_BUS_NAMES_KEY,
     )
-    selected_bus_ids = [bus_name_to_id[n] for n in selected_names]
+    selected_bus_ids = [node_label_to_id[n] for n in selected_names]
     st.session_state[PREDICTION_SELECTED_BUS_IDS_KEY] = selected_bus_ids
 
     st.divider()
@@ -288,6 +346,7 @@ if run_btn or cached_result is None or source_changed:
                 raw_dir=_RAW_DIR,
                 load_scale=load_scale,
                 scenario=shared_scenario,
+                grid_dataset=page_grid_dataset,
             )
 
     elif model_source == "LSTM":
@@ -299,6 +358,7 @@ if run_btn or cached_result is None or source_changed:
                 raw_dir=_RAW_DIR,
                 load_scale=load_scale,
                 scenario=shared_scenario,
+                grid_dataset=page_grid_dataset,
                 retrain=retrain,
                 epochs=epochs,
             )
@@ -312,6 +372,7 @@ if run_btn or cached_result is None or source_changed:
                 raw_dir=_RAW_DIR,
                 load_scale=load_scale,
                 scenario=shared_scenario,
+                grid_dataset=page_grid_dataset,
             )
 
     elif model_source == "LSTM+GNN":
@@ -323,6 +384,7 @@ if run_btn or cached_result is None or source_changed:
                 raw_dir=_RAW_DIR,
                 load_scale=load_scale,
                 scenario=shared_scenario,
+                grid_dataset=page_grid_dataset,
                 retrain=retrain,
                 epochs=epochs,
             )
@@ -335,6 +397,7 @@ if run_btn or cached_result is None or source_changed:
                 raw_dir=_RAW_DIR,
                 load_scale=load_scale,
                 scenario=shared_scenario,
+                grid_dataset=page_grid_dataset,
             )
 
     st.session_state.pred_scale = load_scale
@@ -416,7 +479,7 @@ else:
 
     for bus_id in selected_bus_ids:
         bus_df = pred_df[pred_df["bus_id"] == bus_id].sort_values("timestamp")
-        name = bus_id_to_name.get(bus_id, bus_id)
+        name = node_id_to_name.get(bus_id, bus_id)
         timestamps = bus_df["timestamp"].tolist()
 
         # 신뢰구간 밴드

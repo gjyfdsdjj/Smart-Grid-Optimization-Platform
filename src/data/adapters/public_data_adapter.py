@@ -11,9 +11,8 @@ public_data_adapter — KPX 전력수급현황 CSV 로더
 
 출력 계약
 ---------
-load_df : pd.DataFrame
-    컬럼 : timestamp (datetime), bus_id (str), bus_name (str),
-            load_mw (float), generation_mw (float)
+national_df : pd.DataFrame
+    컬럼 : timestamp (datetime), demand_mw (float), supply_mw (float)
     주기  : 1시간 (원본 5분 → 평균 리샘플)
     범위  : data/raw/sukub*.csv 전체 기간
 """
@@ -24,29 +23,8 @@ from pathlib import Path
 
 import pandas as pd
 
-# ── 13-노드 비율 정의 (peak_mw 기준) ──────────────────────────────────────────
-_BUS_PEAK: dict[str, tuple[str, float]] = {
-    "BUS_001": ("서울",  7000),
-    "BUS_002": ("인천",  3500),
-    "BUS_003": ("수원",  2500),
-    "BUS_004": ("춘천",  1000),
-    "BUS_005": ("강릉",   800),
-    "BUS_006": ("원주",  1200),
-    "BUS_007": ("대전",  3000),
-    "BUS_008": ("청주",  1500),
-    "BUS_009": ("광주",  2500),
-    "BUS_010": ("전주",  1200),
-    "BUS_011": ("대구",  3500),
-    "BUS_012": ("울산",  2000),
-    "BUS_013": ("부산",  4000),
-}
-
-_TOTAL_PEAK = sum(v[1] for v in _BUS_PEAK.values())  # 37,200 MW
-_BUS_RATIO: dict[str, float] = {k: v[1] / _TOTAL_PEAK for k, v in _BUS_PEAK.items()}
-
-
-def load_kpx_csvs(raw_dir: str | Path) -> pd.DataFrame:
-    """data/raw/sukub*.csv 를 모두 읽어 시간별 노드 부하 DataFrame 으로 반환한다."""
+def load_kpx_national_hourly(raw_dir: str | Path) -> pd.DataFrame:
+    """data/raw/sukub*.csv 를 모두 읽어 시간별 전국 수급 DataFrame 으로 반환한다."""
     raw_dir = Path(raw_dir)
     csv_files = sorted(glob.glob(str(raw_dir / "sukub*.csv")))
     if not csv_files:
@@ -66,9 +44,13 @@ def load_kpx_csvs(raw_dir: str | Path) -> pd.DataFrame:
     )
 
     # 5분 → 1시간 평균 리샘플
-    national_hourly = national.resample("1h").mean().dropna()
+    national_hourly = national.resample("1h").mean().dropna().reset_index()
+    return national_hourly[["timestamp", "demand_mw", "supply_mw"]]
 
-    return _distribute_to_nodes(national_hourly)
+
+def load_kpx_csvs(raw_dir: str | Path) -> pd.DataFrame:
+    """이전 public 진입점 이름을 유지하되 전국 수급 DataFrame을 반환한다."""
+    return load_kpx_national_hourly(raw_dir)
 
 
 def _read_one(path: str) -> pd.DataFrame | None:
@@ -105,42 +87,26 @@ def load_kpx_with_weather(raw_dir: str | Path) -> pd.DataFrame:
 
     Returns
     -------
-    load_df 와 동일한 계약 + temperature_c 컬럼 추가
+    national_df 와 동일한 계약 + 전국 평균 temperature_c 컬럼 추가
     """
     from src.data.adapters.weather_adapter import fetch_historical
 
-    load_df = load_kpx_csvs(raw_dir)
-    start = str(load_df["timestamp"].min().date())
-    end   = str(load_df["timestamp"].max().date())
+    national_df = load_kpx_national_hourly(raw_dir)
+    start = str(national_df["timestamp"].min().date())
+    end = str(national_df["timestamp"].max().date())
 
     print(f"[날씨] {start} ~ {end} 기온 데이터 로딩 중...")
     weather_df = fetch_historical(start, end)
+    weather_hourly = (
+        weather_df.groupby("timestamp", as_index=False)
+        .agg(temperature_c=("temperature_c", "mean"))
+        .sort_values("timestamp")
+    )
 
-    merged = load_df.merge(weather_df, on=["timestamp", "bus_id"], how="left")
+    merged = national_df.merge(weather_hourly, on="timestamp", how="left")
     missing = merged["temperature_c"].isna().sum()
     if missing > 0:
         merged["temperature_c"] = merged["temperature_c"].ffill().bfill()
         print(f"[날씨] {missing}개 결측 → ffill 보완")
 
     return merged
-
-
-def _distribute_to_nodes(national_hourly: pd.DataFrame) -> pd.DataFrame:
-    """전국 총수요를 13개 노드에 비율로 분배한다."""
-    rows: list[dict] = []
-    for ts, row in national_hourly.iterrows():
-        national_load = float(row["demand_mw"])
-        national_supply = float(row["supply_mw"])
-        for bus_id, (bus_name, _) in _BUS_PEAK.items():
-            ratio = _BUS_RATIO[bus_id]
-            # 울산(BUS_012)만 발전 노드 — 공급능력 × 비율로 근사
-            gen_mw = national_supply * _BUS_RATIO["BUS_012"] if bus_id == "BUS_012" else 0.0
-            rows.append({
-                "timestamp": ts,
-                "bus_id": bus_id,
-                "bus_name": bus_name,
-                "load_mw": round(max(0.0, national_load * ratio), 1),
-                "generation_mw": round(max(0.0, gen_mw), 1),
-            })
-
-    return pd.DataFrame(rows)

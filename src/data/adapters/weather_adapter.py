@@ -4,8 +4,8 @@ weather_adapter — Open-Meteo 기온 데이터 로더
 
 출처  : https://open-meteo.com (무료, 키 불필요)
 데이터: 시간별 기온(temperature_2m, °C)
-대상  : 13개 도시 버스 노드
-캐시  : data/weather/{bus_id}.csv (재요청 방지)
+대상  : 현재 GridDataset의 예측 대상 송전탑 노드
+캐시  : data/weather/{node_id}.csv (재요청 방지)
 """
 from __future__ import annotations
 
@@ -15,25 +15,24 @@ from pathlib import Path
 import pandas as pd
 import requests
 
-_BUS_GEO: dict[str, tuple[str, float, float]] = {
-    "BUS_001": ("서울",  37.566, 126.978),
-    "BUS_002": ("인천",  37.457, 126.705),
-    "BUS_003": ("수원",  37.264, 127.029),
-    "BUS_004": ("춘천",  37.874, 127.734),
-    "BUS_005": ("강릉",  37.751, 128.876),
-    "BUS_006": ("원주",  37.343, 127.921),
-    "BUS_007": ("대전",  36.351, 127.385),
-    "BUS_008": ("청주",  36.640, 127.489),
-    "BUS_009": ("광주",  35.160, 126.852),
-    "BUS_010": ("전주",  35.820, 127.148),
-    "BUS_011": ("대구",  35.872, 128.602),
-    "BUS_012": ("울산",  35.539, 129.312),
-    "BUS_013": ("부산",  35.180, 129.075),
-}
+from src.data.loaders import load_grid_dataset_or_default
 
 _CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "weather"
 _ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 _FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+
+
+def _weather_nodes() -> list[tuple[str, str, float, float]]:
+    dataset = load_grid_dataset_or_default()
+    nodes = [
+        node
+        for node in dataset.nodes
+        if node.base_load_mw > 0.0
+    ] or list(dataset.nodes)
+    return [
+        (node.node_id, node.node_name, node.latitude, node.longitude)
+        for node in nodes
+    ]
 
 
 def fetch_historical(
@@ -41,7 +40,7 @@ def fetch_historical(
     end_date: str,
     force_refresh: bool = False,
 ) -> pd.DataFrame:
-    """전체 버스 시간별 기온 이력을 반환한다.
+    """전체 Grid 예측 노드 시간별 기온 이력을 반환한다.
 
     Parameters
     ----------
@@ -56,8 +55,8 @@ def fetch_historical(
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     frames: list[pd.DataFrame] = []
 
-    for bus_id, (name, lat, lon) in _BUS_GEO.items():
-        cache_path = _CACHE_DIR / f"{bus_id}.csv"
+    for node_id, name, lat, lon in _weather_nodes():
+        cache_path = _CACHE_DIR / f"{node_id}.csv"
 
         if not force_refresh and cache_path.exists():
             df = pd.read_csv(cache_path, parse_dates=["timestamp"])
@@ -69,7 +68,7 @@ def fetch_historical(
                 frames.append(df)
                 continue
 
-        print(f"  [날씨] {name}({bus_id}) 다운로드 중...")
+        print(f"  [날씨] {name}({node_id}) 다운로드 중...")
         resp = requests.get(
             _ARCHIVE_URL,
             params={
@@ -87,7 +86,7 @@ def fetch_historical(
 
         df = pd.DataFrame({
             "timestamp": pd.to_datetime(data["hourly"]["time"]),
-            "bus_id": bus_id,
+            "bus_id": node_id,
             "temperature_c": data["hourly"]["temperature_2m"],
         }).dropna()
 
@@ -112,7 +111,7 @@ def fetch_recent(past_days: int = 3, forecast_days: int = 2) -> pd.DataFrame:
     """
     frames: list[pd.DataFrame] = []
 
-    for bus_id, (name, lat, lon) in _BUS_GEO.items():
+    for node_id, name, lat, lon in _weather_nodes():
         resp = requests.get(
             _FORECAST_URL,
             params={
@@ -130,7 +129,7 @@ def fetch_recent(past_days: int = 3, forecast_days: int = 2) -> pd.DataFrame:
 
         df = pd.DataFrame({
             "timestamp": pd.to_datetime(data["hourly"]["time"]),
-            "bus_id": bus_id,
+            "bus_id": node_id,
             "temperature_c": data["hourly"]["temperature_2m"],
         }).dropna()
 

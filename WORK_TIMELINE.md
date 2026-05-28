@@ -1021,3 +1021,145 @@
   - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_geo_place_service.py -q` -> 12개 통과
   - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 99개 통과, 14개 deselected
 - 다음 작업: 실제 화면에서 지도 아래가 설치 목록 중심으로 정리되는지 확인한다.
+
+### 2026-05-29 Grid 전환 1~2단계 기준선 및 공통 계약 정의
+- 작업: Grid 전환 작업의 1~2단계를 진행했다. `BUS_001~BUS_013`, `B01~B13`, `SITE_NORTH/CENTRAL/SOUTH`와 관련 하드코딩 상수를 즉시 삭제하지 않고 legacy 제거 대상으로 고정했으며, 기본 발전소/기본 송전탑/사용자 추가 지점을 새 Grid seed로 삼는 기준선을 문서화했다. `src/data/schemas.py`에는 `GridNode`, `GridLine`, `GridDataset`, `PowerPlantSpec`, `TransmissionTowerSpec`, `GridPowerProfile`과 관련 Literal 타입을 추가했다.
+- 수정 파일: `docs/GRID_MIGRATION_BASELINE_2026-05-29.md`, `src/data/schemas.py`, `tests/test_grid_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 현재 단계에서는 Monitoring, Simulation, Prediction의 기존 실행 경로를 바꾸지 않는다.
+  - legacy ID와 상수는 후속 전환 완료 전까지 fallback/기존 경로로 유지한다.
+  - 새 Grid 계약은 후속 `nodes.csv`, `lines.csv`, `plants.csv`, `tower_candidates.csv` 스키마의 기준이 된다.
+  - 발전소와 송전탑은 모두 `GridNode`로 표현하고, 상세 정보는 각각 `PowerPlantSpec`, `TransmissionTowerSpec`에 둔다.
+  - `GridLine.is_bidirectional=True`를 기본으로 두어 데이터 의미는 양방향, 계산 입력은 후속 변환기에서 from/to로 넘기는 방향을 고정했다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_grid_contract.py tests/test_app_landing_contract.py tests/test_geo_place_service.py -q` -> 16개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 103개 통과, 14개 deselected
+  - `git diff --check -- src/data/schemas.py docs/GRID_MIGRATION_BASELINE_2026-05-29.md tests/test_grid_contract.py` -> 통과
+- 다음 작업: 3~4단계로 넘어가 `nodes.csv`, `lines.csv`, `plants.csv`, `tower_candidates.csv`의 CSV 스키마 초안과 최소 예시 CSV를 만든다.
+
+### 2026-05-29 Grid 전환 3~4단계 CSV 스키마 초안 및 최소 예시 생성
+- 작업: 새 Grid 계약을 실제 파일로 표현할 수 있도록 `nodes.csv`, `lines.csv`, `plants.csv`, `tower_candidates.csv` 스키마 초안을 문서화하고, 기본 발전소 6개와 기본 송전탑 12개를 포함한 최소 mock CSV를 만들었다. 현재 단계에서는 CSV 로더나 Monitoring/Simulation/Prediction 연결은 하지 않았다.
+- 수정 파일: `docs/GRID_CSV_SCHEMA_2026-05-29.md`, `data/grid/README.md`, `data/grid/mock/README.md`, `data/grid/mock/nodes.csv`, `data/grid/mock/lines.csv`, `data/grid/mock/plants.csv`, `data/grid/mock/tower_candidates.csv`, `tests/test_grid_csv_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `nodes.csv`는 발전소와 송전탑을 모두 `GridNode`로 표현하며 `EPSG:4326`, `elevation_source=not_queried` 기준을 유지한다.
+  - `lines.csv`는 새 노드 ID만 참조하고, 데이터 의미는 양방향으로 둔다.
+  - `plants.csv`는 발전소 상세 능력치를 `node_id`로 연결한다.
+  - `tower_candidates.csv`는 기본 송전탑을 후속 Simulation 후보지 전환의 seed로 쓸 수 있게 상세 입지 속성을 담는다.
+  - 테스트는 CSV 헤더 순서, 기본 asset 누락 여부, 선로 참조 무결성, 연결 그래프 여부, 발전소/송전탑 상세 파일의 node 참조를 고정한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_grid_csv_contract.py -q` -> 6개 통과
+  - `git diff --check -- docs/GRID_CSV_SCHEMA_2026-05-29.md data/grid/README.md data/grid/mock/README.md data/grid/mock/nodes.csv data/grid/mock/lines.csv data/grid/mock/plants.csv data/grid/mock/tower_candidates.csv tests/test_grid_csv_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 109개 통과, 14개 deselected
+- 다음 작업: 5단계로 넘어가 기본 발전소/송전탑과 사용자 추가 지점을 `GridNode`로 변환하는 builder 계층을 만든다.
+
+### 2026-05-29 Grid 전환 5~6단계 GridNode 변환 및 발전/부하 profile 규칙
+- 작업: 기본 발전소/기본 송전탑/사용자 설치 지점을 `GridDataset`으로 묶는 builder 계층을 추가하고, 노드별 `GridPowerProfile`을 생성하는 발전/부하 배분 규칙을 구현했다. 이번 단계에서는 Monitoring, Simulation, Prediction 호출부와 지도 overlay는 아직 전환하지 않았다.
+- 수정 파일: `src/data/grid_builder.py`, `tests/test_grid_builder.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `build_default_grid_dataset()`은 기본 발전소 6개와 기본 송전탑 12개를 `GridNode`, `PowerPlantSpec`, `TransmissionTowerSpec`으로 변환한다.
+  - 랜딩에서 저장한 `InstallationPoint(kind="power_plant")`는 `USER_PLANT_*` 노드와 사용자 발전소 spec으로 변환한다.
+  - 랜딩에서 저장한 `InstallationPoint(kind="transmission_tower")`는 `USER_TOWER_*` 노드와 사용자 송전탑 spec으로 변환한다.
+  - `start_point`, `end_point` 같은 비전력망 설치 kind는 GridNode로 변환하지 않고 warning에 남긴다.
+  - `build_grid_power_profiles()`는 송전탑 `base_load_mw` 비율로 부하를 배분하고, 발전소 가용용량 비율로 발전량을 배분한다.
+  - 기본 MVP seed 총부하는 `7,200MW`로 두어 현재 기본 발전소 mock 용량 안에서 균형 profile을 만들 수 있게 했다.
+  - 슬랙 후보는 가용 발전용량이 가장 큰 발전소로 선택되며, 현재 기본값에서는 `PLANT_ULSAN`이다.
+  - 중복 사용자 설치 ID는 중복 `GridNode`와 중복 spec을 제외하고 warning에 남긴다.
+  - `GridLine` 생성은 7단계 작업으로 남겨두고, builder metadata에 `line_generation_status=pending_step_7`을 기록한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_grid_builder.py tests/test_grid_contract.py tests/test_grid_csv_contract.py -q` -> 16개 통과
+  - `git diff --check -- src/data/grid_builder.py tests/test_grid_builder.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 115개 통과, 14개 deselected
+- 다음 작업: 7단계로 넘어가 `GridNode`들을 잇는 양방향 `GridLine` 생성 규칙을 만든다.
+
+### 2026-05-29 Grid 전환 7~8단계 양방향 GridLine 생성 및 랜딩 overlay 전환
+- 작업: `GridNode` 기반 양방향 `GridLine` 생성 규칙을 추가하고, `GridDataset`을 `MapOverlayResult`로 변환하는 grid overlay 경로를 만들었다. 랜딩 지도는 이제 기본 발전소/송전탑과 사용자 설치 지점을 직접 mock point로 조립하지 않고 `build_default_grid_dataset() -> MapOverlayService.build_grid_overlay()` 경로를 사용한다. Monitoring, Simulation, Prediction 계산 경로는 아직 legacy/fallback 구조를 유지한다.
+- 수정 파일: `src/data/grid_builder.py`, `src/services/map_overlay_service.py`, `app.py`, `tests/test_grid_builder.py`, `tests/test_map_overlay_contract.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 기본 GridDataset은 기본 노드 18개, 양방향 선로 26개, power profile 18개를 생성한다.
+  - 선로는 기본 송전탑 backbone, 송전탑 redundancy, 발전소-송전탑 연결, 사용자 노드 연결 규칙으로 만든다.
+  - 제주-해남 연결과 사용자 설치 지점 연결은 `candidate` 상태로 남긴다.
+  - 모든 `GridLine`은 새 `node_id`만 참조하고 `is_bidirectional=True`를 유지한다.
+  - `MapOverlayService.build_grid_overlay()`는 `GridNode`를 지도 point로, `GridLine`을 지도 line으로 변환하고 profile의 발전/부하/순주입/slack metadata를 point에 붙인다.
+  - 랜딩 지도는 Grid overlay의 point/line을 기본으로 사용하고, 기존 Simulation overlay에서는 추천 후보지/경로만 보조로 붙인다.
+  - 사용자 설치 지점은 GridDataset에 이미 포함되므로 별도 `installation:*` point로 중복 표시하지 않는다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_grid_builder.py tests/test_grid_contract.py tests/test_grid_csv_contract.py tests/test_app_landing_contract.py tests/test_map_overlay_contract.py tests/test_map_overlay_renderer_contract.py -q` -> 40개 통과
+  - `git diff --check -- app.py src/services/map_overlay_service.py src/data/grid_builder.py tests/test_grid_builder.py tests/test_map_overlay_contract.py tests/test_app_landing_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 119개 통과, 14개 deselected
+  - `build_default_grid_dataset()` 직접 확인 -> `nodes=18`, `lines=26`, `power_profiles=18`, slack `PLANT_ULSAN`
+  - `.venv/bin/python -m streamlit run app.py --server.port 8502 --server.address 127.0.0.1 --server.headless true` -> 서버 기동
+  - `curl -I http://127.0.0.1:8502` -> HTTP 200 확인
+- 다음 작업: 9단계로 넘어가 Monitoring/DC Power Flow 입력을 `GridDataset` 기반 `BusInput`/`LineInput` 변환기로 연결한다.
+
+### 2026-05-29 Grid 전환 9~10단계 Monitoring/DC Power Flow 및 Simulation/A* 전환
+- 작업: Monitoring의 DC Power Flow 입력 원천을 legacy `B01~B13`에서 `GridDataset`으로 전환하고, Simulation의 기본 시작/종료/후보지/A* 그래프를 legacy `BUS_001~BUS_013`, `SITE_NORTH/CENTRAL/SOUTH` 대신 `PLANT_*`, `TOWER_*`, `USER_TOWER_*`, `GLINE_*` 기준으로 바꿨다. legacy 상수는 최종 삭제 단계 전 fallback/호환용으로 남겨두되 기본 실행 경로에서는 사용하지 않는다.
+- 수정 파일: `src/data/grid_powerflow_adapter.py`, `src/services/monitoring_service.py`, `src/services/simulation_service.py`, `src/services/map_overlay_service.py`, `pages/01_monitoring.py`, `pages/02_simulation.py`, `app.py`, `src/data/schemas.py`, `src/ui/scenario_controls.py`, `src/services/scenario_service.py`, `tests/test_grid_powerflow_adapter.py`, `tests/test_map_overlay_contract.py`, `tests/test_simulation_route_score.py`, `tests/test_service_integration_contract.py`, `tests/test_simulation_page_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `build_powerflow_inputs_from_grid()`가 `GridNode/GridPowerProfile/GridLine`을 `BusInput/LineInput`으로 변환한다.
+  - Monitoring `run_dc_power_flow()`는 기본 발전소/송전탑과 사용자 설치 지점으로 만든 `GridDataset`을 주 경로로 사용하고, 결과 metadata에 `grid_dataset`, `slack_bus_id`, 포함/제외 선로 ID를 남긴다.
+  - Monitoring 선로 상태는 이제 `GLINE_*` 선로와 `PLANT_*`/`TOWER_*` 노드 ID를 기준으로 생성된다.
+  - Monitoring/Simulation 지도 overlay는 `MonitoringResult.metadata["grid_dataset"]`의 좌표를 사용해 새 Grid 노드 위치에 선로를 그린다.
+  - Simulation 기본 시작 노드는 `PLANT_INCHEON`, 종료 노드는 `TOWER_DAEGU`로 바뀌었다.
+  - Simulation 후보지는 기본/사용자 송전탑 GridNode이며 기본 추천 결과는 `TOWER_*` 후보 12개를 대상으로 계산한다.
+  - 사용자 추가 송전탑 후보는 `USER_TOWER_*` 노드 ID로 A* 경로와 추천 결과에 들어간다.
+  - A* edge는 거리 기반 임시 k-nearest가 아니라 `GridLine`의 실제 연결을 사용한다.
+  - counterfactual delta도 Monitoring의 Grid 기반 DC Power Flow 입력을 재사용해 병렬 지원선 효과를 계산한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_grid_powerflow_adapter.py tests/test_grid_builder.py tests/test_map_overlay_contract.py tests/test_monitoring_page_contract.py tests/test_simulation_route_score.py tests/test_service_integration_contract.py tests/test_simulation_page_contract.py tests/test_app_landing_contract.py -q` -> 54개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 122개 통과, 14개 deselected
+  - `git diff --check -- app.py pages/01_monitoring.py pages/02_simulation.py src/data/schemas.py src/data/grid_powerflow_adapter.py src/services/monitoring_service.py src/services/simulation_service.py src/services/map_overlay_service.py src/services/scenario_service.py src/ui/scenario_controls.py tests/test_grid_powerflow_adapter.py tests/test_map_overlay_contract.py tests/test_simulation_route_score.py tests/test_service_integration_contract.py tests/test_simulation_page_contract.py` -> 통과
+  - 직접 확인: Monitoring DC 결과 `line_statuses=26`, slack `PLANT_ULSAN`, 대표 선로 `GLINE_TOWER_HAENAM__TOWER_JEJU`
+  - 직접 확인: Simulation 기본 결과 `source=astar`, fallback 없음, 후보 12개, 상위 후보 `TOWER_GUMI`, 경로 ID는 `PLANT_INCHEON -> ... -> TOWER_DAEGU` 형태
+- 다음 작업: 11단계로 넘어가 Prediction/LSTM/GNN의 `BUS_*` 기준을 새 `node_id`와 `GridLine` edge 기준으로 전환한다.
+
+### 2026-05-29 Grid 전환 11~12단계 Prediction/LSTM/GNN 및 CSV 로더 연결 강화
+- 작업: Prediction 기본 실행 경로를 legacy `BUS_001~BUS_013`, `L01~L17`에서 `GridDataset`의 `TOWER_*` 예측 노드와 `GLINE_*` 선로로 전환했다. 동시에 `nodes.csv`, `lines.csv`, `plants.csv`, `tower_candidates.csv`를 실제 `GridDataset`으로 읽는 CSV 로더를 추가하고, CSV 실패 시 기본 발전소/송전탑 graph로 fallback하도록 연결했다.
+- 수정 파일: `src/data/loaders.py`, `src/data/schemas.py`, `src/services/prediction_service.py`, `src/services/map_overlay_service.py`, `pages/03_prediction.py`, `tests/test_grid_csv_loader.py`, `tests/test_prediction_service_contract.py`, `tests/test_prediction_risk_and_fallback.py`, `tests/test_prediction_page_contract.py`, `tests/test_map_overlay_contract.py`, `tests/test_service_integration_contract.py`, `tests/test_model_quality.py`, `tests/test_prediction_lstm_slow.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `load_grid_dataset_from_csv()`가 Grid CSV 네 파일을 읽고, 타입/참조/중복/범위/연결성을 검증한 뒤 `GridPowerProfile`을 생성한다.
+  - `load_grid_dataset_or_default()`는 CSV가 없거나 깨졌을 때 `build_default_grid_dataset()`으로 내려가며 `FallbackInfo(mode="mock_data")`와 원인을 남긴다.
+  - 사용자 설치 지점이 있으면 CSV 노드에 `USER_PLANT_*`/`USER_TOWER_*`를 추가하고 사용자 노드 연결을 포함해 `GridLine`을 재생성한다.
+  - Prediction의 mock/baseline/GNN/hybrid는 기본적으로 CSV 기반 `GridDataset`을 사용하고, 예측 대상은 부하가 있는 송전탑 GridNode 12개다.
+  - KPX raw 부하 이력은 기존 `BUS_*` 분배 결과를 그대로 쓰지 않고 전국 총수요 패턴만 가져와 Grid 송전탑 부하 가중치로 재배분한다.
+  - GNN은 하드코딩 `_GRAPH_EDGE_DEFS` 대신 `GridLine`에서 생성한 edge를 `GNNForecaster.fit(graph_edges=...)`에 전달한다.
+  - LSTM은 저장 모델이 legacy BUS scaler와 맞지 않으면 baseline fallback으로 전환하고, `requires_lstm_retrain_for_grid_nodes=True` metadata를 남긴다.
+  - Prediction 지도 overlay는 `PredictionResult.metadata["grid_dataset"]` 좌표를 사용해 위험 선로를 새 GridNode 위치에 표시한다.
+  - Prediction 페이지의 노드 선택 UI는 고정 BUS 목록이 아니라 현재 GridDataset의 부하 노드 목록을 사용한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_grid_csv_loader.py tests/test_prediction_service_contract.py tests/test_prediction_risk_and_fallback.py tests/test_prediction_page_contract.py tests/test_map_overlay_contract.py tests/test_service_integration_contract.py -q` -> 30개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_prediction_feature_builder.py tests/test_prediction_lstm_slow.py -q` -> 3개 통과, 1개 skipped
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 126개 통과, 14개 deselected
+  - `git diff --check -- src/data/schemas.py src/data/loaders.py src/services/prediction_service.py src/services/map_overlay_service.py pages/03_prediction.py tests/test_grid_csv_loader.py tests/test_prediction_service_contract.py tests/test_service_integration_contract.py tests/test_prediction_risk_and_fallback.py tests/test_model_quality.py tests/test_prediction_lstm_slow.py tests/test_map_overlay_contract.py tests/test_prediction_page_contract.py` -> 통과
+  - 직접 확인: mock/baseline/GNN 모두 `predictions=288`, 예측 노드 12개, 대표 위험 선로 `GLINE_TOWER_SEOUL_TOWER_CHUNCHEON`, `legacy_bus_source=False`
+- 다음 작업: 13단계로 넘어가 실제 고품질 데이터셋 확장, 지역별 부하 가중치 개선, LSTM/GNN 재학습용 장기 시계열 정리를 진행한다.
+
+### 2026-05-29 Grid 전환 13~15단계 enhanced CSV, legacy 실행 경로 삭제, 안정화
+- 작업: `data/grid/enhanced/` 현실성 강화 synthetic CSV를 기본 실행 데이터셋으로 추가하고, 기본 로더가 이 CSV를 우선 사용하도록 연결했다. Monitoring mock/DC Power Flow, Simulation A*/추천, Prediction mock/baseline/LSTM/GNN의 기본 실행 경로에서 legacy `BUS_*`, `B*`, `SITE_*` 하드코딩 의존을 제거하고 GridDataset/GridLine 기준으로 정리했다. 문서와 테스트도 현재 Grid 기준으로 갱신했다.
+- 수정 파일: `data/grid/enhanced/README.md`, `data/grid/enhanced/nodes.csv`, `data/grid/enhanced/lines.csv`, `data/grid/enhanced/plants.csv`, `data/grid/enhanced/tower_candidates.csv`, `data/grid/README.md`, `src/data/loaders.py`, `src/data/adapters/public_data_adapter.py`, `src/data/adapters/weather_adapter.py`, `src/services/monitoring_service.py`, `src/services/simulation_service.py`, `src/services/prediction_service.py`, `src/services/map_overlay_service.py`, `src/engine/forecast/gnn_forecaster.py`, `src/engine/forecast/feature_builder.py`, `src/engine/powerflow/dc_power_flow.py`, `src/engine/powerflow/congestion_metrics.py`, `app.py`, `AGENTS.md`, `docs/GRID_MIGRATION_BASELINE_2026-05-29.md`, `docs/WORK_OWNERSHIP_AND_CODE_FLOW_2026-05-17.md`, 관련 테스트 파일
+- 유기적 동작:
+  - enhanced CSV는 발전소 12개, 송전탑/부하 노드 24개, GridLine 44개를 담는다.
+  - `load_grid_dataset_or_default()`는 기본적으로 enhanced CSV를 읽고, 실패하면 기본 Grid mock graph로 fallback한다.
+  - Monitoring fallback mock도 더 이상 `B01~B13` 선로를 만들지 않고 GridLine/GridPowerProfile로 선로 상태를 합성한다.
+  - Simulation 후보지는 `tower_candidates.csv`와 사용자 송전탑 GridNode에서 오며, 이전 기본 후보지 상수는 삭제했다.
+  - Prediction은 KPX CSV를 전국 수급 시계열로 읽은 뒤 GridNode 부하 가중치로 재분배한다.
+  - GNN은 고정 edge 목록 없이 `GridLine` edge를 사용하고, edge가 없을 때만 입력 노드 순서 기반 이웃 fallback을 쓴다.
+  - `dc_power_flow.build_default_buses()`와 `build_default_line_inputs()`는 외부 호출 호환을 위해 유지하되, 반환값은 enhanced GridDataset 변환 결과로 바꿨다.
+  - map overlay는 Monitoring/Prediction 좌표 fallback 상수 없이 GridDataset metadata 또는 route waypoint 좌표만 사용한다.
+- 검증:
+  - 직접 확인: enhanced loader `source=csv`, `nodes=36`, `plants=12`, `tower_candidates=24`, `lines=44`, warnings 없음
+  - 직접 확인: Monitoring DC 결과 `source=dc_power_flow`, `line_statuses=44`, slack `PLANT_YEONGGWANG`
+  - 직접 확인: Monitoring mock 결과 `line_statuses=44`, `legacy_bus_source=False`
+  - 직접 확인: Simulation 기본 결과 `source=astar`, 후보 24개, 상위 후보 `TOWER_GUMI`, fallback 없음
+  - 직접 확인: KPX national loader 컬럼 `timestamp`, `demand_mw`, `supply_mw`
+  - 직접 확인: Prediction GNN 결과 `predictions=576`, 위험 선로 4개, fallback 없음
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_grid_csv_loader.py tests/test_grid_powerflow_adapter.py tests/test_monitoring_page_contract.py tests/test_simulation_route_score.py tests/test_prediction_service_contract.py tests/test_prediction_risk_and_fallback.py tests/test_prediction_feature_builder.py tests/test_map_overlay_contract.py tests/test_app_landing_contract.py tests/test_scenario_service.py tests/test_scenario_ui_contract.py -q` -> 75개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 127개 통과, 14개 deselected
+  - `git diff --check`는 실행했으나 현재 dirty worktree 전반의 기존 CRLF/trailing whitespace 변경 때문에 실패했다. 이번 작업 범위 밖의 전역 line-ending 정리는 하지 않았다.
+- 다음 작업: synthetic enhanced CSV를 실제 공개/기관 출처 데이터로 교체할 후보 소스를 정리하고, Grid node/line 기준 LSTM/GNN 재학습 데이터셋을 별도 slow/integration 경로로 준비한다.

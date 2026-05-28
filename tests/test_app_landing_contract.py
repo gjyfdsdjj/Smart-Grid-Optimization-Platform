@@ -5,7 +5,7 @@ from math import atan2, cos, radians, sin, sqrt
 from pathlib import Path
 
 import app
-from src.data.schemas import InstallationPoint, MapOverlayPoint
+from src.data.schemas import InstallationPoint, MapOverlayPoint, MapOverlayResult, ScenarioContext
 
 
 class _FakeSessionState(dict):
@@ -207,13 +207,81 @@ def test_landing_dedupe_keeps_last_overlay_value():
     assert points[0].longitude == 128.0
 
 
+def test_landing_points_use_grid_overlay_and_filter_legacy_service_points(monkeypatch):
+    fake_state = _FakeSessionState(
+        sgop_landing_installations=[
+            InstallationPoint(
+                installation_id="power_plant-20260529150000-1",
+                label="구미 발전소",
+                kind="power_plant",
+                latitude=36.1195,
+                longitude=128.3446,
+                capacity_mw=500.0,
+            )
+        ],
+    )
+    monkeypatch.setattr(app.st, "session_state", fake_state)
+    scenario = ScenarioContext(
+        scenario_id="landing-grid-test",
+        created_at=datetime(2026, 5, 29, 15, 0),
+    )
+    grid_user_point = MapOverlayPoint(
+        overlay_id="grid-node:USER_PLANT_POWER_PLANT_20260529150000_1",
+        label="구미 발전소",
+        kind="power_plant",
+        latitude=36.1195,
+        longitude=128.3446,
+        metadata={"node_id": "USER_PLANT_POWER_PLANT_20260529150000_1"},
+    )
+    service_candidate = MapOverlayPoint(
+        overlay_id="tower_candidate:TOWER_ROUTE_EXTRA",
+        label="추가 송전탑 경로",
+        kind="tower_candidate",
+        latitude=35.98,
+        longitude=128.05,
+    )
+    non_candidate_service_point = MapOverlayPoint(
+        overlay_id="substation:OLD_NODE",
+        label="이전 서비스 지점",
+        kind="substation",
+        latitude=37.5665,
+        longitude=126.9780,
+    )
+    grid_overlay = MapOverlayResult(
+        scenario=scenario,
+        created_at=scenario.created_at,
+        source="manual",
+        points=[grid_user_point],
+    )
+    service_overlay = MapOverlayResult(
+        scenario=scenario,
+        created_at=scenario.created_at,
+        source="astar",
+        points=[service_candidate, non_candidate_service_point],
+    )
+
+    points = app._build_landing_points(grid_overlay, service_overlay)
+    overlay_ids = {point.overlay_id for point in points}
+
+    assert overlay_ids == {
+        "grid-node:USER_PLANT_POWER_PLANT_20260529150000_1",
+        "tower_candidate:TOWER_ROUTE_EXTRA",
+    }
+    assert "installation:power_plant-20260529150000-1" not in overlay_ids
+    assert "substation:OLD_NODE" not in overlay_ids
+
+
 def test_landing_page_uses_common_map_overlay_renderer():
     source = Path(app.__file__).read_text(encoding="utf-8")
 
     assert "from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay" in source
+    assert "from src.data.loaders import load_grid_dataset_or_default" in source
+    assert "load_grid_dataset_or_default(" in source
+    assert "MapOverlayService().build_grid_overlay(" in source
     assert "render_map_overlay(" in source
     assert "return_map_data=True" in source
     assert "MapOverlayService().build_landing_overlay(" in source
+    assert "_build_landing_points(grid_overlay, service_overlay)" in source
     assert "_render_selected_point(" not in source
     assert "최근 선택 지점" not in source
 

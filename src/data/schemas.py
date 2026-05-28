@@ -85,6 +85,28 @@ InstallationMode = Literal[
     "review",
 ]
 
+GridNodeType = Literal[
+    "power_plant",
+    "transmission_tower",
+    "user_power_plant",
+    "user_transmission_tower",
+]
+
+GridDataSource = Literal[
+    "default_asset",
+    "user_installation",
+    "csv",
+    "fallback_mock",
+    "legacy",
+]
+
+GridLineStatus = Literal[
+    "active",
+    "planned",
+    "candidate",
+    "out_of_service",
+]
+
 
 # ── 공통 메타데이터 ────────────────────────────────────────────────────────────
 
@@ -217,6 +239,137 @@ class InstallationPoint:
     metadata: dict[str, object] = field(default_factory=dict)
 
 
+# ── Grid 공통 계약 ────────────────────────────────────────────────────────────
+
+@dataclass
+class GridNode:
+    """발전소와 송전탑을 함께 다루는 전력망 노드 계약.
+
+    현재 Grid 전환 작업의 기준 노드다. legacy `BUS_*` 또는 `B*` ID를
+    확장하지 않고, 기본 발전소/송전탑과 사용자 추가 지점을 같은 그래프
+    노드로 표현한다.
+    """
+
+    node_id: str
+    node_name: str
+    node_type: GridNodeType
+    latitude: float
+    longitude: float
+    voltage_kv: float
+    region: str = ""
+    base_load_mw: float = 0.0
+    elevation_m: float | None = None
+    coordinate_system: str = "EPSG:4326"
+    elevation_source: str = "not_queried"
+    source: GridDataSource = "default_asset"
+    source_id: str = ""
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class GridLine:
+    """GridNode 사이의 송전망 연결 계약.
+
+    데이터 의미는 양방향을 기본으로 하고, DC Power Flow 같은 계산 엔진에
+    넘길 때만 from/to 방향 입력으로 변환한다.
+    """
+
+    line_id: str
+    from_node_id: str
+    to_node_id: str
+    voltage_kv: float
+    capacity_mw: float
+    reactance_pu: float
+    distance_km: float
+    resistance_pu: float = 0.0
+    loss_factor: float = 0.0
+    terrain_risk: float = 0.0
+    is_bidirectional: bool = True
+    status: GridLineStatus = "active"
+    source: GridDataSource = "default_asset"
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class PowerPlantSpec:
+    """GridNode에 연결되는 발전소 상세 계약."""
+
+    plant_id: str
+    plant_name: str
+    node_id: str
+    capacity_mw: float
+    fuel_type: str
+    min_output_mw: float
+    max_output_mw: float
+    ramp_rate_mw_per_h: float | None = None
+    availability: float = 1.0
+    operating_cost: float | None = None
+    emission_factor: float | None = None
+    source: GridDataSource = "default_asset"
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class TransmissionTowerSpec:
+    """GridNode에 연결되는 송전탑 또는 송전탑 후보 상세 계약."""
+
+    tower_id: str
+    tower_name: str
+    node_id: str
+    voltage_kv: float
+    elevation_m: float | None = None
+    height_m: float | None = None
+    terrain_slope_deg: float | None = None
+    install_cost_billion: float | None = None
+    land_type: str = ""
+    environment_risk: float = 0.0
+    policy_risk: float = 0.0
+    accessibility_score: float | None = None
+    nearest_node_id: str = ""
+    source: GridDataSource = "default_asset"
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class GridPowerProfile:
+    """GridNode별 발전/부하/순주입 프로필.
+
+    후속 단계에서 KPX 전국 수요나 발전소 출력값을 node_id 기준으로 배분할
+    때 사용한다. `net_injection_mw`는 `generation_mw - load_mw` 기준이다.
+    """
+
+    node_id: str
+    timestamp: datetime | None = None
+    generation_mw: float = 0.0
+    load_mw: float = 0.0
+    net_injection_mw: float = 0.0
+    load_weight: float = 0.0
+    generation_weight: float = 0.0
+    is_slack_candidate: bool = False
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class GridDataset:
+    """새 Grid 전환의 공통 데이터 묶음.
+
+    CSV, 기본 asset, 사용자 설치 지점, fallback mock을 같은 형태로 담는다.
+    Monitoring/Simulation/Prediction은 후속 단계에서 이 계약을 각 엔진 입력으로
+    변환해 사용한다.
+    """
+
+    nodes: list[GridNode] = field(default_factory=list)
+    lines: list[GridLine] = field(default_factory=list)
+    plants: list[PowerPlantSpec] = field(default_factory=list)
+    tower_candidates: list[TransmissionTowerSpec] = field(default_factory=list)
+    power_profiles: list[GridPowerProfile] = field(default_factory=list)
+    created_at: datetime | None = None
+    source: GridDataSource = "fallback_mock"
+    warnings: list[str] = field(default_factory=list)
+    fallback: FallbackInfo = field(default_factory=lambda: FallbackInfo(enabled=False))
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
 # ── 시나리오 저장 상태 ────────────────────────────────────────────────────────
 
 @dataclass
@@ -231,8 +384,8 @@ class ScenarioPageState:
     landing_installations: list[InstallationPoint] = field(default_factory=list)
     monitoring_load_scale: float = 1.0
     monitoring_data_source: str = "DC Power Flow"
-    simulation_start_bus_id: str = "BUS_001"
-    simulation_end_bus_id: str = "BUS_011"
+    simulation_start_bus_id: str = "PLANT_INCHEON"
+    simulation_end_bus_id: str = "TOWER_DAEGU"
     simulation_candidate_site_ids: list[str] = field(default_factory=list)
     simulation_load_scale: float = 1.0
     prediction_load_scale: float = 1.0
@@ -331,6 +484,7 @@ class MonitoringResult:
     summary: str = ""
     warnings: list[str] = field(default_factory=list)
     fallback: FallbackInfo = field(default_factory=lambda: FallbackInfo(enabled=False))
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 # ── 시뮬레이션 ────────────────────────────────────────────────────────────────
@@ -407,6 +561,7 @@ class SimulationInput:
     end_bus_id: str = ""
     candidate_site_ids: list[str] = field(default_factory=list)
     user_candidate_points: list[InstallationPoint] = field(default_factory=list)
+    user_grid_installations: list[InstallationPoint] = field(default_factory=list)
     load_scale: float = 1.0
     notes: str = ""
 
@@ -425,6 +580,7 @@ class SimulationResult:
     summary: str = ""
     warnings: list[str] = field(default_factory=list)
     fallback: FallbackInfo = field(default_factory=lambda: FallbackInfo(enabled=False))
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 # ── 예측 피처 ─────────────────────────────────────────────────────────────────
@@ -527,3 +683,4 @@ class PredictionResult:
     scenario: ScenarioContext | None = None
     warnings: list[str] = field(default_factory=list)
     fallback: FallbackInfo = field(default_factory=lambda: FallbackInfo(enabled=False))
+    metadata: dict[str, object] = field(default_factory=dict)

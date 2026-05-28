@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from src.data.adapters.vworld_adapter import get_map_capability
+from src.data.grid_builder import build_default_grid_dataset
 from src.data.schemas import InstallationPoint, MapOverlayPoint, ScenarioContext
 from src.services.map_overlay_service import MapOverlayService
 from src.services.monitoring_service import MonitoringService
@@ -145,6 +146,37 @@ def test_landing_overlay_wraps_points_and_routes_with_common_metadata():
     assert "landing local warning" in overlay.warnings
 
 
+def test_grid_overlay_exposes_grid_nodes_lines_and_power_profile_metadata():
+    scenario = _scenario()
+    dataset = build_default_grid_dataset(created_at=scenario.created_at)
+
+    overlay = MapOverlayService().build_grid_overlay(
+        dataset,
+        scenario=scenario,
+        created_at=scenario.created_at,
+        map_capability=_map_2_5d_capability(),
+    )
+    point_ids = {point.overlay_id for point in overlay.points}
+
+    assert overlay.scenario.scenario_id == scenario.scenario_id
+    assert overlay.source == "manual"
+    assert len(overlay.points) == len(dataset.nodes)
+    assert len(overlay.lines) == len(dataset.lines)
+    assert overlay.metadata["grid_stage"] == "7-8"
+    assert overlay.metadata["line_generation_status"] == "generated"
+    assert overlay.metadata["slack_node_ids"] == ["PLANT_ULSAN"]
+    assert not any(point.metadata["node_id"].startswith(("BUS_", "B0", "SITE_")) for point in overlay.points)
+    assert not any(line.metadata["line_id"].startswith(("BUS_", "B0", "SITE_")) for line in overlay.lines)
+    assert all(line.from_point.overlay_id in point_ids for line in overlay.lines)
+    assert all(line.to_point.overlay_id in point_ids for line in overlay.lines)
+
+    slack_point = next(point for point in overlay.points if point.metadata["node_id"] == "PLANT_ULSAN")
+    assert slack_point.kind == "power_plant"
+    assert slack_point.metadata["is_slack_candidate"] is True
+    assert slack_point.metadata["generation_mw"] > 0.0
+    assert any(line.metadata["is_bidirectional"] is True for line in overlay.lines)
+
+
 def test_simulation_overlay_exposes_candidate_points_and_ranked_routes():
     scenario = _scenario()
     service = SimulationService()
@@ -172,17 +204,18 @@ def test_simulation_overlay_exposes_candidate_points_and_ranked_routes():
 
     assert overlay.scenario.scenario_id == scenario.scenario_id
     assert overlay.source == "astar"
-    assert len(candidate_points) == 3
+    assert len(candidate_points) == len(simulation.recommendations)
     assert len(overlay.lines) == len(monitoring.line_statuses)
-    assert len(overlay.routes) == 3
+    assert len(overlay.routes) == len(simulation.recommendations)
     assert {line.metadata["line_id"] for line in overlay.lines} == {
         line.line_id for line in monitoring.line_statuses
     }
-    assert [route.rank for route in overlay.routes] == [1, 2, 3]
+    assert [route.rank for route in overlay.routes] == list(range(1, len(overlay.routes) + 1))
     assert overlay.routes[0].candidate_id == simulation.recommendations[0].candidate_id
     assert overlay.routes[0].metadata["score_total"] == simulation.recommendations[0].score.total_score
     assert all(route.points for route in overlay.routes)
-    assert any(point.metadata["candidate_id"] == "SITE_SOUTH" for point in candidate_points)
+    assert all(str(point.metadata["candidate_id"]).startswith("TOWER_") for point in candidate_points)
+    assert not any(str(point.metadata["candidate_id"]).startswith("SITE_") for point in candidate_points)
 
 
 def test_simulation_overlay_exposes_landing_installation_candidate_metadata():
@@ -217,14 +250,14 @@ def test_simulation_overlay_exposes_landing_installation_candidate_metadata():
     route = overlay.routes[0]
 
     assert candidate_point.source == "manual"
-    assert candidate_point.metadata["candidate_id"] == "user:tower-manual-001"
-    assert candidate_point.metadata["installation_id"] == "tower-manual-001"
+    assert candidate_point.metadata["candidate_id"] == "USER_TOWER_TOWER_MANUAL_001"
+    assert candidate_point.metadata["installation_id"] == "USER_TOWER_TOWER_MANUAL_001"
     assert candidate_point.metadata["candidate_source"] == "landing_installation"
     assert candidate_point.latitude == installation.latitude
     assert candidate_point.longitude == installation.longitude
-    assert route.candidate_id == "user:tower-manual-001"
+    assert route.candidate_id == "USER_TOWER_TOWER_MANUAL_001"
     assert route.metadata["candidate_source"] == "landing_installation"
-    assert route.metadata["installation_id"] == "tower-manual-001"
+    assert route.metadata["installation_id"] == "USER_TOWER_TOWER_MANUAL_001"
 
 
 def test_prediction_overlay_uses_risk_line_ids_for_table_map_sync():
@@ -249,6 +282,8 @@ def test_prediction_overlay_uses_risk_line_ids_for_table_map_sync():
     assert all(line.kind == "risk_line" for line in overlay.lines)
     assert all("predicted_utilization" in line.metadata for line in overlay.lines)
     assert all("peak_risk_hour" in line.metadata for line in overlay.lines)
+    assert all(point.metadata["coordinate_precision"] == "grid_node" for point in overlay.points)
+    assert not any(point.metadata["node_id"].startswith("BUS_") for point in overlay.points)
 
 
 def test_overlay_fallback_messages_do_not_expose_vworld_key():

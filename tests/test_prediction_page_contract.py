@@ -70,6 +70,8 @@ def test_prediction_overlay_line_ids_match_risk_line_ids():
     assert overlay.scenario.scenario_id == scenario.scenario_id
     assert overlay_line_ids == risk_line_ids
     assert all(line.kind == "risk_line" for line in overlay.lines)
+    assert all(line_id.startswith("GLINE_") for line_id in overlay_line_ids)
+    assert all(point.metadata["coordinate_precision"] == "grid_node" for point in overlay.points)
 
 
 def test_prediction_overlay_uses_predicted_utilization_for_fallback_tables():

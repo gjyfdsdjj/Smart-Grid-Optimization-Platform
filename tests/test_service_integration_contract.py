@@ -112,7 +112,10 @@ def test_actual_service_flow_preserves_shared_scenario_and_metadata():
     assert simulation.fallback.mode == "none"
     assert simulation.selected_route is not None
     assert simulation.selected_route.source == "astar"
-    assert [recommendation.rank for recommendation in simulation.recommendations] == [1, 2, 3]
+    assert [recommendation.rank for recommendation in simulation.recommendations] == list(
+        range(1, len(simulation.recommendations) + 1)
+    )
+    assert all(recommendation.candidate_id.startswith("TOWER_") for recommendation in simulation.recommendations)
     assert [recommendation.candidate_id for recommendation in simulation.recommendations]
     assert simulation.deltas
     assert any(
@@ -125,6 +128,10 @@ def test_actual_service_flow_preserves_shared_scenario_and_metadata():
     assert prediction.predictions
     assert prediction.risk_lines
     assert prediction.warnings[0] == build_source_warning("PredictionService", "baseline")
+    assert prediction.metadata["legacy_bus_source"] is False
+    assert prediction.metadata["prediction_node_count"] == 24
+    assert all(pred.bus_id.startswith("TOWER_") for pred in prediction.predictions)
+    assert all(risk.line_id.startswith("GLINE_") for risk in prediction.risk_lines)
 
 
 def test_prediction_mock_path_preserves_shared_scenario_contract():
@@ -139,7 +146,8 @@ def test_prediction_mock_path_preserves_shared_scenario_contract():
     assert result.source == "mock"
     assert result.fallback.mode == "mock_data"
     assert result.warnings[0] == build_fallback_warning("PredictionService", "mock_data")
-    assert len(result.predictions) == 24 * 13
+    assert len(result.predictions) == 24 * 24
+    assert result.metadata["legacy_bus_source"] is False
 
 
 def test_monitoring_actual_failure_falls_back_without_losing_scenario(monkeypatch):
@@ -233,7 +241,7 @@ def test_prediction_hybrid_failure_uses_baseline_fallback_contract(
             warnings=[],
         )
 
-    monkeypatch.setattr(service, "_load_weather_history", lambda raw_dir: load_df_13bus)
+    monkeypatch.setattr(service, "_load_grid_history", lambda raw_dir, dataset: load_df_13bus)
     monkeypatch.setattr(service, "_predict_lstm", fail_lstm)
     monkeypatch.setattr(service, "_predict_gnn", fake_gnn)
     monkeypatch.setattr(service, "run_baseline_prediction", fake_baseline)

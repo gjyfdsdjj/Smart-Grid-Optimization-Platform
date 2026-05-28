@@ -1,0 +1,13 @@
+tower_id,tower_name,node_id,voltage_kv,elevation_m,height_m,terrain_slope_deg,install_cost_billion,land_type,environment_risk,policy_risk,accessibility_score,nearest_node_id,source
+TOWER_SPEC_GEOCHANG,거창 송전탑,TOWER_GEOCHANG,345,,68,9.5,14.8,mountain,0.32,0.22,0.58,TOWER_CHANGWON,default_asset
+TOWER_SPEC_SEOUL,서울 송전탑,TOWER_SEOUL,345,,62,3.0,18.5,urban,0.42,0.55,0.82,PLANT_INCHEON,default_asset
+TOWER_SPEC_GANGNEUNG,강릉 송전탑,TOWER_GANGNEUNG,345,,70,11.0,15.2,mountain,0.36,0.24,0.55,PLANT_SOKCHO,default_asset
+TOWER_SPEC_DAEJEON,대전 송전탑,TOWER_DAEJEON,345,,65,5.5,13.0,suburban,0.20,0.18,0.78,TOWER_SEOUL,default_asset
+TOWER_SPEC_CHUNCHEON,춘천 송전탑,TOWER_CHUNCHEON,345,,66,8.8,14.2,mountain,0.30,0.20,0.62,TOWER_SEOUL,default_asset
+TOWER_SPEC_JEJU,제주도 송전탑,TOWER_JEJU,154,,58,7.2,16.0,island,0.38,0.30,0.50,TOWER_HAENAM,default_asset
+TOWER_SPEC_GUMI,구미 송전탑,TOWER_GUMI,345,,64,4.5,12.4,industrial,0.18,0.16,0.80,TOWER_SANGJU,default_asset
+TOWER_SPEC_DAEGU,대구 송전탑,TOWER_DAEGU,345,,63,3.8,13.1,urban,0.24,0.28,0.84,TOWER_GUMI,default_asset
+TOWER_SPEC_CHANGWON,창원 송전탑,TOWER_CHANGWON,345,,64,5.2,13.7,industrial,0.22,0.20,0.76,PLANT_BUSAN,default_asset
+TOWER_SPEC_YEONGCHEON,영천 송전탑,TOWER_YEONGCHEON,345,,66,6.4,13.4,rural,0.21,0.18,0.72,TOWER_DAEGU,default_asset
+TOWER_SPEC_SANGJU,상주 송전탑,TOWER_SANGJU,345,,65,6.8,13.3,rural,0.22,0.17,0.70,TOWER_DAEJEON,default_asset
+TOWER_SPEC_HAENAM,해남 송전탑,TOWER_HAENAM,345,,67,7.5,14.1,coastal,0.29,0.21,0.61,PLANT_GWANGJU,default_asset

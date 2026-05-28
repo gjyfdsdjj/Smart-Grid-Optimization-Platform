@@ -13,8 +13,8 @@ from src.services.prediction_service import (
 
 def test_combine_prediction_lists_uses_weighted_average(prediction_factory):
     ts = datetime(2026, 1, 5, 1, 0)
-    primary = [prediction_factory(timestamp=ts, bus_id="BUS_001", value=100.0)]
-    secondary = [prediction_factory(timestamp=ts, bus_id="BUS_001", value=200.0)]
+    primary = [prediction_factory(timestamp=ts, bus_id="NODE_A", value=100.0)]
+    secondary = [prediction_factory(timestamp=ts, bus_id="NODE_A", value=200.0)]
 
     combined = _combine_prediction_lists(
         primary=primary,
@@ -31,11 +31,11 @@ def test_combine_prediction_lists_uses_weighted_average(prediction_factory):
 
 def test_combine_prediction_lists_key_mismatch_raises(prediction_factory):
     ts = datetime(2026, 1, 5, 1, 0)
-    primary = [prediction_factory(timestamp=ts, bus_id="BUS_001", value=100.0)]
+    primary = [prediction_factory(timestamp=ts, bus_id="NODE_A", value=100.0)]
     secondary = [
         prediction_factory(
             timestamp=ts + timedelta(hours=1),
-            bus_id="BUS_001",
+            bus_id="NODE_A",
             value=200.0,
         )
     ]
@@ -93,7 +93,7 @@ def test_hybrid_prediction_falls_back_to_baseline_when_branch_fails(
             warnings=[],
         )
 
-    monkeypatch.setattr(service, "_load_weather_history", lambda raw_dir: load_df_13bus)
+    monkeypatch.setattr(service, "_load_grid_history", lambda raw_dir, dataset: load_df_13bus)
     monkeypatch.setattr(service, "_predict_lstm", fail_lstm)
     monkeypatch.setattr(service, "_predict_gnn", fake_gnn)
     monkeypatch.setattr(service, "run_baseline_prediction", fake_baseline)

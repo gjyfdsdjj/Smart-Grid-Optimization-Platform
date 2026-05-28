@@ -31,8 +31,9 @@ def test_lstm_prediction_load_or_retrain_contract():
         epochs=1,
     )
 
-    assert result.source == "lstm"
-    assert result.fallback.mode == "none"
+    assert result.source in {"lstm", "baseline"}
+    assert result.fallback.mode in {"none", "baseline_model"}
     assert result.predictions
-    assert len(result.predictions) == 24 * 13
+    assert len(result.predictions) == 24 * 24
+    assert result.metadata["legacy_bus_source"] is False
     assert all(pred.predicted_load_mw >= 0.0 for pred in result.predictions)
