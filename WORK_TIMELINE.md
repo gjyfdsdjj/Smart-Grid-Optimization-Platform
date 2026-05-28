@@ -937,3 +937,87 @@
   - `.venv/Scripts/python.exe -m pytest tests/test_app_landing_contract.py -q` -> 현재 `.venv`에 `pytest`가 없어 실행 불가
   - `.venv310/Scripts/python.exe -m pytest tests/test_app_landing_contract.py -q` -> 현재 `.venv310` 경로가 `No Python at '"/usr/bin\\python.exe'`로 깨져 실행 불가
 - 다음 작업: 필요하면 Monitoring/Simulation 내부 mock 버스/후보지 좌표도 같은 고정 송전탑 목록을 기준으로 재정렬한다.
+
+### 2026-05-28 저장소 전체 구조 재파악
+- 작업: 사용자 요청에 따라 현재 워크트리의 디렉토리, 파일 목록, 주요 텍스트 파일 내용, 서비스/엔진/데이터/UI/테스트 연결 흐름을 재확인했다. 실행 환경과 이전 Streamlit 프로세스 종료 상태를 확인한 뒤, `.git`, `.venv`, 캐시류는 메타데이터 중심으로 제외하고 제품 파일 전체를 인벤토리화했다. 민감 저장소인 `data/private/scenarios.json`과 `secrets` 계열은 원문 노출 없이 저장 역할과 구조만 확인했다.
+- 수정 파일: `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 현재 핵심 흐름은 `app.py -> pages/* -> src/services/* -> src/engine/* -> src/data/* / src/ui/*`다.
+  - app/Monitoring/Simulation/Prediction은 공통 `ScenarioContext`, `ScenarioService`, `MapOverlayService`, `render_map_overlay()` 계약을 공유한다.
+  - Monitoring은 `DC Power Flow`, Simulation은 `A* + counterfactual delta`, Prediction은 `Mock/Baseline/LSTM/GNN/Hybrid` 경로와 fallback 계약을 유지한다.
+  - CSV 원본/날씨 데이터, LSTM 모델, PPTX/PDF 산출물은 파일 타입, 크기, 행 수, 샘플 또는 내부 목차 수준으로 확인했다.
+- 검증:
+  - `git status --short` -> 기존 modified 파일 다수 확인
+  - `find . -path './.git' -prune -o -path './.venv' -prune -o -path './.venv310' -prune -o -path './__pycache__' -prune -o -path '*/__pycache__' -prune -o -path './.pytest_cache' -prune -o -type f -print | sort` -> 제품 파일 목록 확인
+  - `find . -path './.git' -prune -o -path './.venv' -prune -o -path './.venv310' -prune -o -path './__pycache__' -prune -o -path '*/__pycache__' -prune -o -path './.pytest_cache' -prune -o -type d -print | sort` -> 제품 디렉토리 구조 확인
+  - `wc -l app.py pages/*.py src/**/*.py src/**/**/*.py tests/*.py *.md docs/*.md meeting_plan/*.md presentation/*.md requirements.txt pytest.ini .env.example .streamlit/config.toml` -> 주요 텍스트 15,092라인 확인
+  - `wc -l data/raw/*.csv data/weather/*.csv` -> CSV 277,857라인 확인
+  - `file presentation/SGOP_발표.pdf presentation/SGOP_발표.pptx 기획안/*.pdf models/lstm/model.keras models/lstm/scalers.pkl` -> 바이너리 타입 확인
+- 다음 작업: 구조 변경을 이어간다면 domain 스텁 정리 또는 VWorld 고도 조회 metadata 확장부터 시작한다.
+
+### 2026-05-28 기본 송전탑 좌표 분산 배치
+- 작업: 기본 발전소 목록은 유지하고, 발전소와 좌표가 겹치던 기본 송전탑 지점을 분산 배치로 조정했다. `인천 송전탑`, `부산 송전탑`, `울산 송전탑`은 각각 기본 발전소 좌표와 동일해 지도에서 겹쳤으므로 `강화 송전탑`, `창원 송전탑`, `영천 송전탑`으로 교체했다. 남서권도 `광주 발전소`와 더 떨어지도록 `나주 송전탑`을 `목포 송전탑`으로 교체했다. 기본 송전탑 수는 12개로 유지했다.
+- 수정 파일: `app.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `app._build_mock_grid_points()`가 반환하는 기본 발전소 6개는 그대로 유지된다.
+  - 기본 송전탑은 `강화`, `서울`, `강릉`, `대전`, `목포`, `충북`, `구미`, `대구`, `창원`, `영천`, `상주`, `해남`으로 구성된다.
+  - 랜딩 overlay 계약의 `coordinate_system="EPSG:4326"`, `elevation_m=None`, `elevation_source="not_queried"`, `source="manual"`은 그대로 유지된다.
+  - 테스트에 기본 발전소와 기본 송전탑 간 최소 거리, 기본 송전탑 간 최소 거리 검증을 추가해 좌표 중복 재발을 막았다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py -q` -> 7개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import app; ..."` -> 기본 발전소 6개, 기본 송전탑 12개 목록 확인
+- 다음 작업: 새 Grid 계약 작업을 시작할 때 이 분산 배치된 기본 송전탑을 초기 `GridNode` 원천으로 사용한다.
+
+### 2026-05-28 기본 송전탑 지역 교체
+- 작업: 사용자 요청에 따라 기본 송전탑 중 `강화 송전탑`, `목포 송전탑`, `충북 송전탑`을 각각 `거창 송전탑`, `춘천 송전탑`, `제주도 송전탑`으로 교체했다. 기본 발전소 목록과 기본 송전탑 수 12개는 유지했다.
+- 수정 파일: `app.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 기본 송전탑은 `거창`, `서울`, `강릉`, `대전`, `춘천`, `제주도`, `구미`, `대구`, `창원`, `영천`, `상주`, `해남`으로 구성된다.
+  - 기본 발전소와 기본 송전탑 간 최소 거리, 기본 송전탑 간 최소 거리 검증은 계속 유지된다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py -q` -> 7개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "import app; ..."` -> 기본 송전탑 12개 목록 확인
+- 다음 작업: 새 Grid 계약 작업 시 현재 기본 발전소 6개와 기본 송전탑 12개를 초기 노드 원천으로 사용한다.
+
+### 2026-05-28 전국 시군 대표 좌표 CSV와 클릭 지명 연결
+- 작업: 랜딩 지도 클릭 좌표에 가장 가까운 시/군 지명을 붙일 수 있도록 `data/geo/korea_places.csv`를 추가하고, CSV 기반 `GeoPlaceService`를 연결했다. CSV는 광역시와 주요 시/군 대표점 161개를 담고, 구미/상주/거창/해남 같은 중소도시와 군 단위도 포함한다.
+- 수정 파일: `data/geo/README.md`, `data/geo/korea_places.csv`, `src/services/geo_place_service.py`, `app.py`, `tests/test_geo_place_service.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `app._extract_clicked_point()`는 기존처럼 클릭 좌표를 `EPSG:4326`, `elevation_m=None`, `elevation_source="not_queried"`로 저장한다.
+  - 클릭 좌표는 `GeoPlaceService.find_nearest_place()`를 통해 가장 가까운 CSV 대표 지명 metadata를 얻는다.
+  - 설치 대상이 발전소면 `구미 발전소`, 송전탑이면 `구미 송전탑`처럼 기본 이름 입력값이 자동 추천된다.
+  - 저장되는 `InstallationPoint.metadata`에는 `nearest_place_id`, `nearest_place_name`, `nearest_place_distance_km`, `suggested_label`, `coordinate_status="xy_only"`가 남는다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_geo_place_service.py tests/test_app_landing_contract.py -q` -> 11개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 98개 통과, 14개 deselected
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -c "from src.services.geo_place_service import GeoPlaceService; ..."` -> CSV 161개 로드, 구미/상주 최근접 0.0 km 확인
+- 다음 작업: 실제 주소 역지오코딩 또는 VWorld/공공 API 연동이 필요하면 현재 CSV 대표점 fallback을 유지한 채 외부 조회 경로를 앞단에 추가한다.
+
+### 2026-05-29 랜딩 클릭 이름 갱신 Streamlit session_state 오류 수정
+- 작업: 지도 클릭 후 `st.session_state.sgop_landing_install_name`을 같은 rerun 안에서 직접 수정해 Streamlit이 `widget key cannot be modified after instantiated` 예외를 내던 문제를 고쳤다. 클릭/설치 추가/목록 초기화 시 이름 변경 요청은 별도 pending key에 저장하고, 다음 rerun에서 `st.text_input` 생성 전에 적용하도록 변경했다.
+- 수정 파일: `app.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 지도 클릭 후 `sgop_landing_last_click`과 pending 이름만 저장하고 즉시 `st.rerun()`한다.
+  - 다음 실행의 `_render_left_panel()`에서 `st.text_input("이름", key=...)` 생성 전에 pending 이름을 적용한다.
+  - 사용자가 직접 입력한 이름은 기존 자동 이름과 다를 때 유지하고, 새 지도 클릭처럼 강제 갱신이 필요한 경우에만 pending 이름으로 교체한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_geo_place_service.py -q` -> 12개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 99개 통과, 14개 deselected
+- 다음 작업: 실제 브라우저에서 지도 클릭 후 이름 입력값이 `가까운 지명 + 발전소/송전탑`으로 갱신되는지 수동 확인한다.
+
+### 2026-05-29 랜딩 최근 선택 지점 중복 표시 제거
+- 작업: 좌측 설치 패널에 클릭 좌표와 가장 가까운 지명이 이미 표시되므로, 지도 아래의 `최근 선택 지점` 섹션을 제거했다. 하단에는 설치 목록만 남기고, 좌표 확인은 좌측 패널로 일원화했다.
+- 수정 파일: `app.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `main()`에서 `_render_selected_point()` 호출을 제거했다.
+  - `_render_selected_point()` 함수 자체도 삭제했다.
+  - `_format_nearest_place()`는 좌측 패널의 지명 표시에서 계속 사용한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_geo_place_service.py -q` -> 12개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 99개 통과, 14개 deselected
+- 다음 작업: 실제 화면에서 지도 아래가 설치 목록 중심으로 정리되는지 확인한다.

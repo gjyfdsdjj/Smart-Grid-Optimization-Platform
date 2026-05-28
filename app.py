@@ -17,6 +17,7 @@ from src.data.schemas import (
     ScenarioContext,
 )
 from src.services.map_overlay_service import MapOverlayService
+from src.services.geo_place_service import GeoPlaceService
 from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay
 from src.ui.scenario_controls import render_scenario_sidebar
 
@@ -45,6 +46,13 @@ _INSTALLATION_MODE_LABEL: dict[InstallationMode, str] = {
     "review": "검토",
 }
 
+_LANDING_TARGET_STATE_KEY = "sgop_landing_target_label"
+_LANDING_NAME_STATE_KEY = "sgop_landing_install_name"
+_LANDING_AUTO_NAME_STATE_KEY = "sgop_landing_auto_install_name"
+_LANDING_AUTO_KIND_STATE_KEY = "sgop_landing_auto_install_kind"
+_LANDING_PENDING_NAME_STATE_KEY = "sgop_landing_pending_install_name"
+_LANDING_PENDING_KIND_STATE_KEY = "sgop_landing_pending_install_kind"
+
 _DEFAULT_POWER_PLANTS: tuple[dict[str, float | str], ...] = (
     {"id": "incheon", "label": "인천 발전소", "latitude": 37.4563, "longitude": 126.7052, "capacity_mw": 1800.0},
     {"id": "gwangju", "label": "광주 발전소", "latitude": 35.1595, "longitude": 126.8526, "capacity_mw": 1200.0},
@@ -55,16 +63,16 @@ _DEFAULT_POWER_PLANTS: tuple[dict[str, float | str], ...] = (
 )
 
 _DEFAULT_TRANSMISSION_TOWERS: tuple[dict[str, float | str], ...] = (
-    {"id": "incheon", "label": "인천 송전탑", "latitude": 37.4563, "longitude": 126.7052},
+    {"id": "geochang", "label": "거창 송전탑", "latitude": 35.6867, "longitude": 127.9095},
     {"id": "seoul", "label": "서울 송전탑", "latitude": 37.5665, "longitude": 126.9780},
     {"id": "gangneung", "label": "강릉 송전탑", "latitude": 37.7519, "longitude": 128.8761},
     {"id": "daejeon", "label": "대전 송전탑", "latitude": 36.3504, "longitude": 127.3845},
-    {"id": "naju", "label": "나주 송전탑", "latitude": 35.0161, "longitude": 126.7108},
-    {"id": "chungbuk", "label": "충북 송전탑", "latitude": 36.6424, "longitude": 127.4890},
+    {"id": "chuncheon", "label": "춘천 송전탑", "latitude": 37.8813, "longitude": 127.7298},
+    {"id": "jeju", "label": "제주도 송전탑", "latitude": 33.4996, "longitude": 126.5312},
     {"id": "gumi", "label": "구미 송전탑", "latitude": 36.1195, "longitude": 128.3446},
     {"id": "daegu", "label": "대구 송전탑", "latitude": 35.8714, "longitude": 128.6014},
-    {"id": "busan", "label": "부산 송전탑", "latitude": 35.1796, "longitude": 129.0756},
-    {"id": "ulsan", "label": "울산 송전탑", "latitude": 35.5384, "longitude": 129.3114},
+    {"id": "changwon", "label": "창원 송전탑", "latitude": 35.2279, "longitude": 128.6811},
+    {"id": "yeongcheon", "label": "영천 송전탑", "latitude": 35.9733, "longitude": 128.9388},
     {"id": "sangju", "label": "상주 송전탑", "latitude": 36.4109, "longitude": 128.1591},
     {"id": "haenam", "label": "해남 송전탑", "latitude": 34.5733, "longitude": 126.5993},
 )
@@ -99,6 +107,8 @@ def main() -> None:
             )
             st.session_state.sgop_landing_installations.append(installation)
             st.session_state.sgop_landing_last_click = None
+            _queue_installation_name_reset(selected_kind)
+            st.rerun()
         else:
             st.sidebar.warning("지도에서 설치 지점을 먼저 선택하세요.")
 
@@ -138,7 +148,8 @@ def main() -> None:
     )
     clicked_point = _extract_clicked_point(map_data)
     if clicked_point is not None:
-        st.session_state.sgop_landing_last_click = clicked_point
+        if _store_last_clicked_point(clicked_point, selected_kind):
+            st.rerun()
 
     st.caption(landing_overlay.summary)
     st.caption(
@@ -157,7 +168,6 @@ def main() -> None:
             for warning in overlay_extra_warnings:
                 st.caption(f"- {warning}")
 
-    _render_selected_point()
     _render_installation_table()
 
 
@@ -168,6 +178,8 @@ def _init_landing_state() -> None:
         st.session_state.sgop_landing_last_click = None
     if "sgop_landing_add_requested" not in st.session_state:
         st.session_state.sgop_landing_add_requested = False
+    if _LANDING_TARGET_STATE_KEY not in st.session_state:
+        st.session_state[_LANDING_TARGET_STATE_KEY] = "발전소"
 
 
 def _render_left_panel() -> tuple[
@@ -184,6 +196,7 @@ def _render_left_panel() -> tuple[
             "설치 대상",
             options=list(_TARGET_KIND_BY_LABEL.keys()),
             horizontal=True,
+            key=_LANDING_TARGET_STATE_KEY,
         )
         selected_kind = _TARGET_KIND_BY_LABEL[selected_label]
 
@@ -193,8 +206,10 @@ def _render_left_panel() -> tuple[
             horizontal=True,
         )
         mode = _INSTALLATION_MODE_BY_LABEL[selected_mode_label]
-        default_name = _TARGET_DEFAULT_NAME[selected_kind]
-        name = st.text_input("이름", value=f"{default_name} {len(st.session_state.sgop_landing_installations) + 1}")
+        selected_point = st.session_state.get("sgop_landing_last_click")
+        selected_point = selected_point if isinstance(selected_point, MapOverlayPoint) else None
+        _sync_installation_name(selected_kind, selected_point)
+        name = st.text_input("이름", key=_LANDING_NAME_STATE_KEY)
 
         capacity_mw: float | None = None
         voltage_kv: float | None = None
@@ -217,11 +232,13 @@ def _render_left_panel() -> tuple[
 
         notes = st.text_area("메모", value="", height=90)
 
-        selected_point = st.session_state.get("sgop_landing_last_click")
         if isinstance(selected_point, MapOverlayPoint):
             st.divider()
             st.metric("x", f"{selected_point.longitude:.6f}")
             st.metric("y", f"{selected_point.latitude:.6f}")
+            nearest_label = _format_nearest_place(selected_point)
+            if nearest_label:
+                st.caption(f"가장 가까운 지명: {nearest_label}")
 
         if st.button("설치 지점 추가", type="primary", use_container_width=True):
             st.session_state.sgop_landing_add_requested = True
@@ -229,6 +246,7 @@ def _render_left_panel() -> tuple[
         if st.button("설치 목록 초기화", use_container_width=True):
             st.session_state.sgop_landing_installations = []
             st.session_state.sgop_landing_last_click = None
+            _queue_installation_name_reset(selected_kind)
             st.rerun()
 
         with st.expander("연결 상태", expanded=False):
@@ -243,7 +261,106 @@ def _render_left_panel() -> tuple[
                 }
             )
 
-        return selected_kind, mode, name.strip() or default_name, capacity_mw, voltage_kv, notes.strip()
+        return (
+            selected_kind,
+            mode,
+            name.strip() or _suggest_installation_name(selected_kind, selected_point),
+            capacity_mw,
+            voltage_kv,
+            notes.strip(),
+        )
+
+
+def _sync_installation_name(
+    kind: InstallationTargetKind,
+    selected_point: MapOverlayPoint | None,
+) -> None:
+    pending_name = st.session_state.pop(_LANDING_PENDING_NAME_STATE_KEY, None)
+    pending_kind = st.session_state.pop(_LANDING_PENDING_KIND_STATE_KEY, None)
+    if isinstance(pending_name, str) and pending_kind == kind:
+        _set_installation_name_state(kind, pending_name)
+        return
+
+    suggested_name = _suggest_installation_name(kind, selected_point)
+    current_name = st.session_state.get(_LANDING_NAME_STATE_KEY)
+    previous_auto_name = st.session_state.get(_LANDING_AUTO_NAME_STATE_KEY)
+    previous_auto_kind = st.session_state.get(_LANDING_AUTO_KIND_STATE_KEY)
+
+    if (
+        not isinstance(current_name, str)
+        or not current_name.strip()
+        or current_name == previous_auto_name
+        or previous_auto_kind != kind
+    ):
+        _set_installation_name_state(kind, suggested_name)
+
+
+def _set_installation_name_state(
+    kind: InstallationTargetKind,
+    suggested_name: str,
+) -> None:
+    st.session_state[_LANDING_NAME_STATE_KEY] = suggested_name
+    st.session_state[_LANDING_AUTO_NAME_STATE_KEY] = suggested_name
+    st.session_state[_LANDING_AUTO_KIND_STATE_KEY] = kind
+
+
+def _queue_installation_name_reset(
+    kind: InstallationTargetKind,
+    selected_point: MapOverlayPoint | None = None,
+) -> None:
+    suggested_name = _suggest_installation_name(kind, selected_point)
+    st.session_state[_LANDING_PENDING_NAME_STATE_KEY] = suggested_name
+    st.session_state[_LANDING_PENDING_KIND_STATE_KEY] = kind
+
+
+def _suggest_installation_name(
+    kind: InstallationTargetKind,
+    selected_point: MapOverlayPoint | None = None,
+) -> str:
+    if isinstance(selected_point, MapOverlayPoint):
+        place_name = selected_point.metadata.get("nearest_place_name")
+        if isinstance(place_name, str) and place_name.strip():
+            return f"{place_name.strip()} {_installation_suffix(kind)}"
+
+    sequence = len(st.session_state.get("sgop_landing_installations", [])) + 1
+    default_name = _TARGET_DEFAULT_NAME[kind]
+    return f"{default_name} {sequence}"
+
+
+def _installation_suffix(kind: InstallationTargetKind) -> str:
+    labels: dict[InstallationTargetKind, str] = {
+        "power_plant": "발전소",
+        "transmission_tower": "송전탑",
+        "start_point": "시작점",
+        "end_point": "종료점",
+    }
+    return labels[kind]
+
+
+def _store_last_clicked_point(
+    clicked_point: MapOverlayPoint,
+    kind: InstallationTargetKind,
+) -> bool:
+    current_point = st.session_state.get("sgop_landing_last_click")
+    changed = not _same_map_point(current_point, clicked_point)
+    if changed:
+        st.session_state.sgop_landing_last_click = clicked_point
+        _queue_installation_name_reset(kind, clicked_point)
+    return changed
+
+
+def _same_map_point(
+    current_point: object,
+    clicked_point: MapOverlayPoint,
+) -> bool:
+    if not isinstance(current_point, MapOverlayPoint):
+        return False
+    return (
+        abs(current_point.latitude - clicked_point.latitude) < 1e-9
+        and abs(current_point.longitude - clicked_point.longitude) < 1e-9
+        and current_point.metadata.get("nearest_place_id")
+        == clicked_point.metadata.get("nearest_place_id")
+    )
 
 
 def _get_service_overlay(
@@ -357,9 +474,18 @@ def _extract_clicked_point(map_data: dict[str, Any] | None) -> MapOverlayPoint |
     except (TypeError, ValueError):
         return None
 
+    metadata: dict[str, object] = {"capture_source": "folium_click"}
+    metadata.update(_nearest_place_metadata(lat, lon))
+    nearest_place_name = metadata.get("nearest_place_name")
+    label = (
+        f"{nearest_place_name} 선택 지점"
+        if isinstance(nearest_place_name, str) and nearest_place_name.strip()
+        else "선택 지점"
+    )
+
     return MapOverlayPoint(
         overlay_id="map-click:last",
-        label="선택 지점",
+        label=label,
         kind="install_point",
         latitude=lat,
         longitude=lon,
@@ -368,8 +494,15 @@ def _extract_clicked_point(map_data: dict[str, Any] | None) -> MapOverlayPoint |
         elevation_source="not_queried",
         status="selected",
         source="manual",
-        metadata={"capture_source": "folium_click"},
+        metadata=metadata,
     )
+
+
+def _nearest_place_metadata(latitude: float, longitude: float) -> dict[str, object]:
+    try:
+        return GeoPlaceService().find_nearest_place(latitude, longitude).to_metadata()
+    except Exception as exc:  # noqa: BLE001
+        return {"nearest_place_lookup_error": str(exc)}
 
 
 def _build_installation_point(
@@ -384,6 +517,15 @@ def _build_installation_point(
 ) -> InstallationPoint:
     created_at = datetime.now().replace(microsecond=0)
     sequence = len(st.session_state.sgop_landing_installations) + 1
+    metadata: dict[str, object] = {
+        "source_overlay_id": selected_point.overlay_id,
+        "coordinate_status": "xy_only",
+        "suggested_label": _suggest_installation_name(kind, selected_point),
+    }
+    for key, value in selected_point.metadata.items():
+        if key.startswith("nearest_place"):
+            metadata[key] = value
+
     return InstallationPoint(
         installation_id=f"{kind}-{created_at:%Y%m%d%H%M%S}-{sequence}",
         label=label,
@@ -398,14 +540,20 @@ def _build_installation_point(
         voltage_kv=voltage_kv if kind == "transmission_tower" else None,
         notes=notes,
         created_at=created_at,
-        metadata={
-            "source_overlay_id": selected_point.overlay_id,
-            "coordinate_status": "xy_only",
-        },
+        metadata=metadata,
     )
 
 
 def _installation_to_overlay_point(installation: InstallationPoint) -> MapOverlayPoint:
+    metadata: dict[str, object] = dict(installation.metadata)
+    metadata.update(
+        {
+            "installation_id": installation.installation_id,
+            "capacity_mw": installation.capacity_mw,
+            "voltage_kv": installation.voltage_kv,
+            "notes": installation.notes,
+        }
+    )
     return MapOverlayPoint(
         overlay_id=f"installation:{installation.installation_id}",
         label=installation.label,
@@ -417,24 +565,25 @@ def _installation_to_overlay_point(installation: InstallationPoint) -> MapOverla
         elevation_source=installation.elevation_source,
         status="selected",
         source="manual",
-        metadata={
-            "installation_id": installation.installation_id,
-            "capacity_mw": installation.capacity_mw,
-            "voltage_kv": installation.voltage_kv,
-            "notes": installation.notes,
-        },
+        metadata=metadata,
     )
 
 
-def _render_selected_point() -> None:
-    selected_point = st.session_state.get("sgop_landing_last_click")
-    if not isinstance(selected_point, MapOverlayPoint):
-        return
+def _format_nearest_place(point: MapOverlayPoint) -> str:
+    place_name = point.metadata.get("nearest_place_name")
+    if not isinstance(place_name, str) or not place_name.strip():
+        return ""
 
-    st.subheader("최근 선택 지점")
-    cols = st.columns(2)
-    cols[0].metric("x", f"{selected_point.longitude:.6f}")
-    cols[1].metric("y", f"{selected_point.latitude:.6f}")
+    province = point.metadata.get("nearest_place_province")
+    location = (
+        f"{province} {place_name}".strip()
+        if isinstance(province, str) and province.strip()
+        else place_name.strip()
+    )
+    distance = point.metadata.get("nearest_place_distance_km")
+    if isinstance(distance, (float, int)):
+        return f"{location} ({distance:.1f} km)"
+    return location
 
 
 def _render_installation_table() -> None:
