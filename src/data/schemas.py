@@ -110,6 +110,26 @@ GridLineStatus = Literal[
     "out_of_service",
 ]
 
+TransmissionScenarioStatus = Literal[
+    "draft",
+    "active",
+    "disabled",
+    "resolved",
+]
+
+XaiTargetType = Literal[
+    "line",
+    "node",
+    "route",
+    "suggested_node",
+]
+
+SuggestedNodeStatus = Literal[
+    "proposed",
+    "accepted",
+    "rejected",
+]
+
 
 # ── 공통 메타데이터 ────────────────────────────────────────────────────────────
 
@@ -583,6 +603,127 @@ class SimulationResult:
     summary: str = ""
     warnings: list[str] = field(default_factory=list)
     fallback: FallbackInfo = field(default_factory=lambda: FallbackInfo(enabled=False))
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+# ── 운영 콘솔 통합 계약 ───────────────────────────────────────────────────────
+
+@dataclass
+class TransmissionScenario:
+    """지도에서 시작/종료 노드를 선택해 생성되는 실제 송전 시나리오."""
+
+    scenario_route_id: str
+    label: str
+    start_node_id: str
+    end_node_id: str
+    start_node_name: str = ""
+    end_node_name: str = ""
+    requested_transfer_mw: float = 0.0
+    route: RouteResult | None = None
+    path_node_ids: list[str] = field(default_factory=list)
+    used_line_ids: list[str] = field(default_factory=list)
+    status: TransmissionScenarioStatus = "draft"
+    created_at: datetime | None = None
+    source: ResultSource = "manual"
+    warnings: list[str] = field(default_factory=list)
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class LineStressSnapshot:
+    """기본 전력흐름과 누적 송전 시나리오를 합산한 선로 stress 상태."""
+
+    line_id: str
+    from_node_id: str
+    to_node_id: str
+    from_node_name: str = ""
+    to_node_name: str = ""
+    capacity_mw: float = 0.0
+    base_flow_mw: float = 0.0
+    scenario_flow_mw: float = 0.0
+    predicted_flow_mw: float = 0.0
+    total_flow_mw: float = 0.0
+    utilization: float = 0.0
+    risk_level: RiskLevel = "low"
+    contributing_scenario_ids: list[str] = field(default_factory=list)
+    shared_route_count: int = 0
+    status: CongestionStatus = "normal"
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class NodeStressSnapshot:
+    """노드 클릭 팝업과 병목 분석에서 공통으로 쓰는 노드 상태."""
+
+    node_id: str
+    node_name: str
+    node_type: GridNodeType | str = ""
+    generation_mw: float = 0.0
+    load_mw: float = 0.0
+    net_injection_mw: float = 0.0
+    connected_line_ids: list[str] = field(default_factory=list)
+    connected_scenario_ids: list[str] = field(default_factory=list)
+    risk_level: RiskLevel = "low"
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class StressAnalysisResult:
+    """app 운영 콘솔이 사용할 선로/노드 누적 stress 분석 결과."""
+
+    scenario: ScenarioContext
+    created_at: datetime
+    load_scale: float
+    transmission_scenarios: list[TransmissionScenario] = field(default_factory=list)
+    line_stresses: list[LineStressSnapshot] = field(default_factory=list)
+    node_stresses: list[NodeStressSnapshot] = field(default_factory=list)
+    bottleneck_line_ids: list[str] = field(default_factory=list)
+    warning_line_ids: list[str] = field(default_factory=list)
+    critical_line_ids: list[str] = field(default_factory=list)
+    summary: str = ""
+    warnings: list[str] = field(default_factory=list)
+    fallback: FallbackInfo = field(default_factory=lambda: FallbackInfo(enabled=False))
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class XaiGridExplanation:
+    """선로/노드/경로 변경 필요성을 설명하는 xAI 팝업 계약."""
+
+    target_id: str
+    target_type: XaiTargetType
+    title: str = ""
+    reason_summary: str = ""
+    before_metrics: dict[str, object] = field(default_factory=dict)
+    after_metrics: dict[str, object] = field(default_factory=dict)
+    bottleneck_causes: list[str] = field(default_factory=list)
+    recommended_actions: list[str] = field(default_factory=list)
+    contributing_scenario_ids: list[str] = field(default_factory=list)
+    confidence: float | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class SuggestedGridNode:
+    """병목 완화를 위해 xAI/추천 엔진이 제안하는 신규 송전탑 후보."""
+
+    suggested_node_id: str
+    label: str
+    latitude: float
+    longitude: float
+    elevation_m: float | None = None
+    coordinate_system: str = "EPSG:4326"
+    elevation_source: str = "not_queried"
+    voltage_kv: float = 345.0
+    capacity_mw: float = 0.0
+    height_m: float | None = None
+    install_cost_billion: float = 0.0
+    target_line_id: str = ""
+    relief_line_ids: list[str] = field(default_factory=list)
+    expected_utilization_delta: float = 0.0
+    reason: str = ""
+    status: SuggestedNodeStatus = "proposed"
+    created_at: datetime | None = None
     metadata: dict[str, object] = field(default_factory=dict)
 
 

@@ -1278,3 +1278,214 @@
   - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 132개 통과, 16개 deselected
   - `git diff --check -- pages/03_prediction.py src/services/map_overlay_service.py tests/test_map_overlay_contract.py tests/test_prediction_page_contract.py WORK_TIMELINE.md` -> 통과
 - 다음 작업: app 단일 화면 통합 시 Prediction 패널도 같은 `selected_node_ids` 계약을 사용해 선택 노드와 위험 선로를 하나의 지도 layer로 합친다.
+
+### 2026-05-29 통합 운영 콘솔 스키마 계약 추가
+- 작업: app 단일 운영 콘솔 통합의 1번 작업으로 지도 클릭 기반 송전 시나리오, 누적 선로/노드 stress, xAI 설명, 신규 송전탑 제안에 필요한 공통 dataclass 계약을 `src/data/schemas.py`에 추가했다. 실제 UI/엔진 연결은 하지 않고, 후속 stress 엔진과 app 통합이 같은 타입을 소비하도록 계약 경계만 먼저 정의했다.
+- 수정 파일: `src/data/schemas.py`, `tests/test_operation_console_schema.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `TransmissionScenario`는 시작 노드, 종료 노드, 요청 송전량, A* `RouteResult`, 사용 선로 목록을 함께 보존한다.
+  - `StressAnalysisResult`는 여러 송전 시나리오가 같은 선로를 공유할 때 `LineStressSnapshot`/`NodeStressSnapshot`으로 누적 이용률과 병목 선로를 표현한다.
+  - `XaiGridExplanation`은 변경 전/후 수치, 병목 원인, 추천 조치, 기여 시나리오 목록을 팝업 UI에 넘길 수 있는 형태로 둔다.
+  - `SuggestedGridNode`는 신규 송전탑 후보의 좌표, 권장 전압/용량, 비용, 예상 이용률 개선량, 승인 상태를 담는다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/data/schemas.py tests/test_operation_console_schema.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_operation_console_schema.py -q` -> 3개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 135개 통과, 16개 deselected
+  - `git diff --check -- src/data/schemas.py tests/test_operation_console_schema.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: `src/engine/stress/route_stress_analyzer.py`를 추가해 `TransmissionScenario` 목록과 DC Power Flow 결과를 `StressAnalysisResult`로 변환한다.
+
+### 2026-05-29 TransmissionScenario 서비스 흐름 추가
+- 작업: app 단일 운영 콘솔 통합의 2번 작업으로 `TransmissionScenarioService`를 추가했다. 지도 UI 연결 전 단계로 시작/종료 노드 선택값을 `TransmissionScenario`로 생성하고, A*/휴리스틱 `RouteResult`를 붙이면 경로 노드열을 GridLine ID 목록으로 변환할 수 있게 했다.
+- 수정 파일: `src/services/transmission_scenario_service.py`, `tests/test_transmission_scenario_service.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 유효한 시작/종료 노드와 송전량은 `status="active"` 시나리오로 생성한다.
+  - 시작/종료가 같거나 GridDataset에 없는 노드, 0MW 이하 송전량은 예외 대신 warning을 남기고 `status="draft"`로 유지한다.
+  - `RouteResult.path_node_ids`의 인접 노드쌍을 양방향 GridLine 기준으로 `used_line_ids`에 채운다.
+  - `out_of_service` 선로와 방향이 맞지 않는 단방향 선로는 사용 선로로 매칭하지 않고 warning으로 남긴다.
+  - 시나리오 목록은 active 필터와 disabled 상태 전환 helper로 관리한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/services/transmission_scenario_service.py tests/test_transmission_scenario_service.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_transmission_scenario_service.py -q` -> 5개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 140개 통과, 16개 deselected
+  - `git diff --check -- src/data/schemas.py tests/test_operation_console_schema.py src/services/transmission_scenario_service.py tests/test_transmission_scenario_service.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: `src/engine/stress/route_stress_analyzer.py`를 추가해 active `TransmissionScenario` 목록의 `used_line_ids`를 선로별 누적 이용률로 계산한다.
+
+### 2026-05-29 app 전역 부하 배율과 Route Stress 분석 엔진 추가
+- 작업: app 단일 운영 콘솔 통합의 3번/7번 작업으로 `app.py`에 시스템 전체 부하 배율 상태를 추가하고, active `TransmissionScenario` 목록이 GridLine에 누적하는 부하를 계산하는 `route_stress_analyzer` 엔진을 추가했다. 지도 클릭 시나리오 UI와 위험 선로 색상 강조는 아직 연결하지 않고, 후속 지도 layer/xAI가 사용할 stress 결과와 overlay metadata까지만 준비했다.
+- 수정 파일: `app.py`, `src/engine/stress/__init__.py`, `src/engine/stress/route_stress_analyzer.py`, `tests/test_route_stress_analyzer.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `GLOBAL_LOAD_SCALE_STATE_KEY="sgop_global_load_scale"`를 `app.py` session state에 추가하고, 설치 패널 아래 `시스템 전체 부하 배율` slider로 제어한다.
+  - app GridDataset/Simulation overlay/stress 분석은 동일한 전역 `load_scale`을 입력으로 받는다.
+  - `analyze_route_stress()`는 기본 선로 흐름을 `capacity_mw * 0.35 * load_scale`로 계산하고, active 송전 시나리오의 `requested_transfer_mw`를 `used_line_ids`별로 누적한다.
+  - `used_line_ids`가 비어 있으면 `path_node_ids`와 GridLine 양방향 연결로 복구를 시도하고, 실패한 구간은 warning으로 남긴다.
+  - 선로별 `base_flow_mw`, `scenario_flow_mw`, `total_flow_mw`, `utilization`, `status`, `risk_level`, `shared_route_count`, `contributing_scenario_ids`를 `StressAnalysisResult`에 채운다.
+  - 노드별 `NodeStressSnapshot`은 Grid power profile 또는 `base_load_mw * load_scale`, 연결 선로, 연결 시나리오, 연결 선로 중 최대 위험도를 담는다.
+  - app 랜딩 overlay 선로에는 시각 스타일을 바꾸지 않고 `stress_*` metadata와 `contributing_scenario_ids`만 부착한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/engine/stress tests/test_route_stress_analyzer.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_route_stress_analyzer.py -q` -> 6개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py tests/test_app_landing_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_route_stress_analyzer.py tests/test_transmission_scenario_service.py tests/test_operation_console_schema.py -q` -> 27개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 148개 통과, 16개 deselected
+  - `git diff --check -- app.py src/data/schemas.py tests/test_operation_console_schema.py src/services/transmission_scenario_service.py tests/test_transmission_scenario_service.py src/engine/stress/__init__.py src/engine/stress/route_stress_analyzer.py tests/test_route_stress_analyzer.py tests/test_app_landing_contract.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: 지도 클릭으로 송전 시작/종료 노드를 선택하고 `TransmissionScenarioService`로 active 시나리오를 생성하는 app UI 흐름을 연결한다.
+
+### 2026-05-29 지도 클릭 기반 송전 시작/종료 노드 선택 추가
+- 작업: app 단일 운영 콘솔 통합의 4번 작업으로 랜딩 지도 상호작용을 `설치`와 `송전 시나리오` 모드로 분리했다. 송전 시나리오 모드에서는 지도 클릭 좌표를 가장 가까운 GridNode로 매칭하고, 시작 노드/종료 노드 선택 상태를 Streamlit session state에 보존한다. A* 경로 생성과 `TransmissionScenario` 목록 추가는 다음 단계로 남겼다.
+- 수정 파일: `app.py`, `src/ui/map_overlay_renderer.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `LANDING_INTERACTION_MODE_STATE_KEY="sgop_landing_interaction_mode"`를 추가해 설치 모드와 송전 시나리오 모드를 분리한다.
+  - 송전 선택 상태는 `start -> end -> ready` 단계로 관리하고, 시작/종료 노드 ID와 label을 별도 session key에 저장한다.
+  - 지도 클릭 좌표는 overlay point 중 `node_id`가 있는 발전소/송전탑과의 haversine 거리로 매칭하며, 기본 threshold는 12km다.
+  - 선택된 시작/종료 GridNode는 지도 point metadata에 `selection_role`, `selected_for="transmission_scenario"`를 붙이고 `status="selected"`로 표시한다.
+  - 설치 모드에서는 기존 설치 지점 클릭, 이름 자동 제안, 설치 지점 추가 흐름을 유지한다.
+  - `render_map_overlay()`는 `last_clicked`와 `last_object_clicked`를 함께 반환해 marker 클릭 좌표를 우선 사용할 수 있게 했다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py -q` -> 21개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 152개 통과, 16개 deselected
+  - `git diff --check -- app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: 선택 완료 상태의 시작/종료 노드를 `TransmissionScenarioService`와 A* 경로 생성에 연결해 active 송전 시나리오를 자동 생성한다.
+
+### 2026-05-29 송전 노드 클릭 rerun/선로 클릭 오인식 보정
+- 작업: 송전 시나리오 모드에서 같은 지도 클릭이 Streamlit rerun 뒤에도 계속 재처리되어 화면이 반복 새로고침되고, 선로 클릭 좌표가 가까운 노드로 오인식되는 문제를 보정했다.
+- 수정 파일: `app.py`, `src/ui/map_overlay_renderer.py`, `tests/test_app_landing_contract.py`, `tests/test_map_overlay_renderer_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 송전 모드에서 처리한 마지막 클릭 signature를 session state에 저장해 같은 `last_object_clicked`/`last_clicked` 값을 다시 처리하지 않는다.
+  - `render_map_overlay()`가 `last_object_clicked_tooltip`도 반환하게 하여 marker tooltip과 GridNode label이 일치할 때만 노드 클릭으로 인정한다.
+  - 선로 tooltip처럼 `line_id | 구간 | status` 형태의 객체 클릭은 nearest node fallback으로 넘어가지 않고 무시한다.
+  - tooltip이 없는 일반 좌표 클릭 fallback은 유지하되 노드 매칭 거리를 12km에서 5km로 줄였다.
+  - 송전 선택 초기화 시 마지막 클릭 signature도 함께 비워 같은 노드를 다시 선택할 수 있게 했다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py -q` -> 23개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 154개 통과, 16개 deselected
+- 다음 작업: 실제 브라우저에서 송전 시나리오 모드의 시작/종료 노드 선택이 한 번의 클릭당 한 번만 처리되는지 수동 확인하고, 이어서 A* 경로 기반 시나리오 자동 생성을 붙인다.
+
+### 2026-05-29 시작/종료 노드 기반 송전 시나리오 자동 생성
+- 작업: app 단일 운영 콘솔 통합의 5번 작업으로 선택 완료된 시작/종료 GridNode를 GridLine 기반 A* 경로 생성에 연결하고, 생성된 `RouteResult`를 `TransmissionScenario`로 저장하는 흐름을 추가했다. 생성된 active 시나리오는 지도에 빨간 활성 경로로 표시되고, 기존 stress 분석 입력에도 자동 반영된다.
+- 수정 파일: `src/services/transmission_scenario_service.py`, `app.py`, `tests/test_transmission_scenario_service.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `TransmissionScenarioService.build_route_between_nodes()`가 `GridDataset.lines`를 방향성 그래프로 보고 A* 경로를 생성한다.
+  - 경로는 `RouteResult(source="astar")`로 반환하며 `path_node_ids`, `waypoints`, `total_distance_km`, `estimated_cost`, summary를 채운다.
+  - app 송전 모드에는 `예상 송전량 (MW)` 입력과 `송전 시나리오 생성` 버튼을 추가했다.
+  - 선택 상태가 `ready`이고 시작/종료 노드가 유효하면 route 생성 -> `TransmissionScenarioService.create_transmission_scenario(..., route=...)` -> `used_line_ids` 채움 -> `sgop_transmission_scenarios`에 append한다.
+  - 같은 시작/종료/송전량/경로/사용 선로 조합은 중복 생성하지 않고 warning으로 막는다.
+  - 생성 성공 시 선택 상태를 초기화하고, active 시나리오 route를 `landing_visible=True`, `display_status="active_simulation"` metadata로 지도에 추가한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/services/transmission_scenario_service.py app.py tests/test_transmission_scenario_service.py tests/test_app_landing_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_transmission_scenario_service.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py tests/test_route_stress_analyzer.py -q` -> 40개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 160개 통과, 16개 deselected
+  - `git diff --check -- app.py src/services/transmission_scenario_service.py tests/test_app_landing_contract.py tests/test_transmission_scenario_service.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: 다중 송전 시나리오 목록 관리 UI를 정리하고, 활성/비활성 전환을 app에서 조작할 수 있게 한다.
+
+### 2026-05-29 다중 송전 시나리오 관리 UI 추가
+- 작업: app 단일 운영 콘솔 통합의 6번 작업으로 생성된 송전 시나리오를 목록에서 확인하고, 시나리오별 색상/순서 metadata를 지도 경로와 sidebar UI가 공유하도록 정리했다. active 시나리오는 지도에 서로 다른 색상으로 표시되고, sidebar에서 비활성화/재활성화/전체 초기화를 할 수 있다.
+- 수정 파일: `app.py`, `src/ui/map_overlay_renderer.py`, `tests/test_app_landing_contract.py`, `tests/test_map_overlay_renderer_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `TransmissionScenario.metadata`에 `scenario_order`, `scenario_color`를 저장해 생성 순서와 지도 표시 색상을 보존한다.
+  - `_build_transmission_scenario_routes()`는 active 시나리오만 지도 route로 변환하고, route/route point metadata에 같은 색상과 순서를 붙인다.
+  - `route_style_for_overlay_route()`는 `scenario_color` metadata가 있으면 기본 빨간색 대신 해당 색상을 사용한다.
+  - 송전 선택 패널 아래에 시나리오 목록을 표시하고, 각 시나리오의 상태, 시작/종료 노드, 송전량, 경로 노드 수, 사용 선로 수를 확인할 수 있게 했다.
+  - 시나리오별 `active`/`disabled` 전환 helper와 전체 초기화 helper를 추가했으며, 비활성 시나리오는 지도 경로와 stress 계산에서 제외된다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py -q` -> 30개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 164개 통과, 16개 deselected
+  - `git diff --check -- app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: 선로별 누적 이용률/위험 선로 계산 결과를 app 화면에서 항상 확인 가능한 요약 패널로 정리하고, 위험 선로 강조와 클릭 상세 패널 연결을 진행한다.
+
+### 2026-05-29 Route Stress 분석 엔진 보강
+- 작업: app 단일 운영 콘솔 통합의 7번 작업으로 `route_stress_analyzer`의 기본 흐름 source 추적, shared-route 병목 판정, 노드 stress 상세 metadata를 보강했다. 화면 UI는 바꾸지 않고, 다음 단계의 선로별 이용률 패널과 xAI 설명이 바로 소비할 수 있는 계산 결과를 확장했다.
+- 수정 파일: `src/engine/stress/route_stress_analyzer.py`, `tests/test_route_stress_analyzer.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - DC Power Flow `MonitoringResult`가 있으면 해당 선로의 `flow_mw`를 base flow로 우선 사용한다.
+  - DC Power Flow 결과가 없거나 일부 선로가 누락되면 해당 선로만 `capacity_mw * 0.35 * load_scale` fallback을 적용하고, `warnings`와 metadata에 source를 남긴다.
+  - 선로별 metadata에 `base_flow_source`, `capacity_margin_mw`, `scenario_count`를 추가했다.
+  - 전체 metadata에 `base_flow_source_by_line`, `capacity_ratio_base_flow_line_ids`, `shared_route_line_ids`, `top_utilization_line_ids`, `max_utilization_line_id`, `bottleneck_rule`을 추가했다.
+  - 병목 선로는 `status>=warning`뿐 아니라 `shared_route_count>=2`인 선로도 포함한다. 따라서 현재 이용률이 정상이어도 여러 송전 시나리오가 겹치는 구간은 후속 xAI/패널에서 병목 후보로 볼 수 있다.
+  - 노드 stress metadata에 연결 선로 수, 연결 시나리오 수, 연결 선로 중 최대 이용률과 해당 선로 ID를 추가했다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/engine/stress/route_stress_analyzer.py tests/test_route_stress_analyzer.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_route_stress_analyzer.py -q` -> 7개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_route_stress_analyzer.py tests/test_transmission_scenario_service.py -q` -> 40개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 165개 통과, 16개 deselected
+  - `git diff --check -- src/engine/stress/route_stress_analyzer.py tests/test_route_stress_analyzer.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: `StressAnalysisResult`를 app 화면에 항상 보이는 선로별 이용률/위험 선로 요약 패널로 연결하고, 위험/경고 선로 지도 강조를 적용한다.
+
+### 2026-05-29 선로별 stress 표시와 위험 선로 지도 강조 추가
+- 작업: app 단일 운영 콘솔 통합의 8번 작업으로 `StressAnalysisResult`를 app 화면에 노출했다. sidebar에는 선로 stress 요약을 붙이고, 지도 아래에는 선로별 이용률 표와 위험/경고 선로 목록을 항상 확인할 수 있게 했다. 지도 선로 렌더링은 `stress_status` metadata를 우선 읽어 경고/위험/과부하/병목 선로를 강조한다.
+- 수정 파일: `app.py`, `src/ui/map_overlay_renderer.py`, `tests/test_app_landing_contract.py`, `tests/test_map_overlay_renderer_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - sidebar `선로 stress` 영역에서 활성 시나리오 수, 병목 선로 수, 위험/과부하 선로 수, 최대 이용률과 최대 이용률 선로를 확인할 수 있다.
+  - 지도 아래 `선로별 이용률` 표는 선로 ID, From/To, 용량, 기본 흐름, 시나리오 추가 흐름, 총 흐름, 이용률, 상태, 공유 시나리오 수, 기여 시나리오, 용량 여유, 병목 여부를 이용률 높은 순으로 표시한다.
+  - `선로 상태 필터`는 전체/정상/경고/위험/과부하/병목만을 지원한다.
+  - `위험/경고 선로` 표는 `warning_line_ids`, `critical_line_ids`, `bottleneck_line_ids`를 합쳐 운영자가 즉시 확인해야 할 선로만 보여준다.
+  - `_attach_stress_metadata()`는 overlay line에 `stress_capacity_mw`, `stress_base_flow_mw`, `stress_total_flow_mw`, `stress_predicted_flow_mw`, `stress_capacity_margin_mw`, `is_bottleneck`까지 전달한다.
+  - `line_style_for_overlay_line()`은 선택 선로를 최우선으로 두고, 그 외에는 `stress_status`와 `is_bottleneck`을 기준으로 지도 선로 색상/두께/투명도를 조정한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py tests/test_route_stress_analyzer.py -q` -> 40개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 168개 통과, 16개 deselected
+  - `git diff --check -- app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: 선로/노드 클릭을 DC Power Flow 상세 패널에 연결하고, 클릭 대상별 상세 정보를 팝업 또는 상세 패널로 표시한다.
+
+### 2026-05-29 겹친 송전 시나리오 병목 선로 표시 순서 보정
+- 작업: 시나리오 경로와 병목 선로가 같은 좌표에 겹칠 때, 병목 선로가 먼저 그려진 뒤 활성 시나리오 경로에 가려져 주황색 굵은 선이 보이지 않는 문제를 보정했다.
+- 수정 파일: `src/ui/map_overlay_renderer.py`, `tests/test_map_overlay_renderer_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 지도 렌더링에서 일반 선로를 먼저 그리고, 활성 시나리오 경로를 그린 뒤, `stress_status`가 warning/critical/overload이거나 `is_bottleneck=True`인 강조 선로를 마지막에 한 번 더 그린다.
+  - 이용률은 정상이어도 여러 시나리오가 같은 선로를 공유한 병목 후보는 시나리오 경로 위에 주황색 굵은 선으로 보인다.
+  - 선택 선로 스타일은 기존처럼 최우선 보라색으로 유지한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/ui/map_overlay_renderer.py tests/test_map_overlay_renderer_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_map_overlay_renderer_contract.py tests/test_app_landing_contract.py tests/test_route_stress_analyzer.py -q` -> 41개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 169개 통과, 16개 deselected
+  - `git diff --check -- src/ui/map_overlay_renderer.py tests/test_map_overlay_renderer_contract.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: 실제 app에서 겹치는 시나리오 2개를 생성해 지도 위 병목 선로 강조가 경로 위에 보이는지 수동 확인한다.
+
+### 2026-05-29 송전탑/발전소 노드 stress 색상 표시 추가
+- 작업: 선로 병목뿐 아니라 송전탑/발전소 노드에도 연결 선로 기준 stress 색상을 표시하도록 연결했다. 별도 철탑 정격 데이터를 임의로 만들지 않고, `NodeStressSnapshot.metadata.max_connected_utilization`과 `risk_level`을 노드의 수용 여유 proxy로 사용한다.
+- 수정 파일: `app.py`, `src/ui/map_overlay_renderer.py`, `tests/test_app_landing_contract.py`, `tests/test_map_overlay_renderer_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `_attach_node_stress_metadata()`가 `StressAnalysisResult.node_stresses`를 지도 `MapOverlayPoint`의 발전소/송전탑 노드에 붙인다.
+  - 노드 metadata에는 발전량, 부하량, 순주입량, 연결 선로/시나리오 수, 연결 선로 중 최대 이용률과 해당 선로 ID를 포함한다.
+  - `point_style_for_overlay_point()`는 선택 상태를 최우선으로 유지하고, 선택되지 않은 발전소/송전탑은 `stress_node_risk_level` 기준으로 medium=노란색, high=빨간색, critical=진한 빨간색으로 표시한다.
+  - 노드 팝업에는 연결 선로 중 최대 이용률과 최대 이용률 선로 ID를 함께 표시한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py tests/test_route_stress_analyzer.py -q` -> 43개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 171개 통과, 16개 deselected
+  - `git diff --check -- app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: 실제 app에서 겹치는 시나리오를 만든 뒤 선로와 연결 송전탑 노드가 함께 색상으로 강조되는지 확인한다.
+
+### 2026-05-29 Monitoring DC Power Flow 선택 상세 패널 연결
+- 작업: app 단일 운영 콘솔 통합의 9번 작업으로 Monitoring DC Power Flow 결과를 app 랜딩에 연결하고, 지도에서 노드/선로를 클릭했을 때 선택 상세 패널에 DC Power Flow와 stress 정보를 함께 표시하도록 했다.
+- 수정 파일: `app.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `_get_landing_monitoring_result()`가 현재 시나리오, 설치 지점, 전역 부하 배율 기준으로 `MonitoringService.run_dc_power_flow()`를 실행하고 결과를 session/cache에 저장한다.
+  - `analyze_route_stress()` 호출에 `monitoring_result`를 전달해 기본 선로 흐름이 가능한 경우 DC Power Flow 결과를 기준으로 계산된다.
+  - 지도 object tooltip에서 `line_id | label | status` 형식을 파싱해 선로 클릭을 식별하고, 노드 tooltip은 기존 발전소/송전탑 point 매칭으로 식별한다.
+  - 선택된 객체는 `sgop_selected_grid_object`에 `{type, id, label, source}` 형태로 저장하며, 선로 선택 시 지도에서도 선택 선로가 보라색으로 강조된다.
+  - 설치 모드에서 노드/선로를 클릭하면 설치 지점 대신 상세 선택으로 처리하고, 빈 지도 클릭은 기존 설치 지점 선택 흐름을 유지한다.
+  - 송전 시나리오 모드에서는 노드 클릭이 시작/종료 선택을 유지하고, 선로 클릭은 상세 선택으로 처리한다.
+  - `선택 상세` 패널은 선로 선택 시 DC 현재 흐름, DC 이용률, 손실, stress 누적 흐름, 시나리오 추가 흐름, 누적 이용률, 상태, 위험도, 공유 시나리오를 표시한다.
+  - 노드 선택 시 발전량, 부하량, 순주입량, 연결 선로, 연결 시나리오, 최대 연결 이용률, 최대 이용률 선로, 위험도를 표시한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py tests/test_app_landing_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_route_stress_analyzer.py tests/test_map_overlay_renderer_contract.py -q` -> 48개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 176개 통과, 16개 deselected
+  - `git diff --check -- app.py tests/test_app_landing_contract.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: Prediction 결과를 app stress 입력으로 연결해 미래 부하 기반 위험 선로를 지도와 표에 반영한다.

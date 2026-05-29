@@ -20,7 +20,7 @@ _LINE_COLOR: dict[str, str] = {
     "normal": "#22c55e",
     "warning": "#eab308",
     "critical": "#ef4444",
-    "overload": "#8b5cf6",
+    "overload": "#991b1b",
     "unknown": "#94a3b8",
     "selected": "#7c3aed",
 }
@@ -53,7 +53,8 @@ def render_map_overlay(
     )
     _add_tile_layer(folium, folium_map, map_capability)
 
-    for line in overlay.lines:
+    base_lines, highlighted_lines = split_overlay_lines_by_highlight(overlay.lines)
+    for line in base_lines:
         _add_overlay_line(
             folium,
             folium_map,
@@ -62,11 +63,22 @@ def render_map_overlay(
         )
     for route in overlay.routes:
         _add_overlay_route(folium, folium_map, route)
+    for line in highlighted_lines:
+        _add_overlay_line(
+            folium,
+            folium_map,
+            line,
+            selected=line_id_from_overlay_line(line) == selected_line_id,
+        )
     for point in overlay.points:
         _add_overlay_point(folium, folium_map, point)
 
     folium.LayerControl(collapsed=True).add_to(folium_map)
-    returned_objects = ["last_clicked"] if return_map_data else []
+    returned_objects = [
+        "last_clicked",
+        "last_object_clicked",
+        "last_object_clicked_tooltip",
+    ] if return_map_data else []
     map_data = st_folium(
         folium_map,
         width=width,
@@ -205,9 +217,63 @@ def line_style_for_status(status: str, *, selected: bool = False) -> dict[str, A
     }
 
 
+def line_style_for_overlay_line(
+    line: MapOverlayLine,
+    *,
+    selected: bool = False,
+) -> dict[str, Any]:
+    if selected:
+        return line_style_for_status(line.status, selected=True)
+
+    stress_status = line.metadata.get("stress_status")
+    status = stress_status if isinstance(stress_status, str) and stress_status else line.status
+    style = line_style_for_status(status)
+    if status == "warning":
+        style.update({"weight": 5, "opacity": 0.78})
+    elif status == "critical":
+        style.update({"weight": 6, "opacity": 0.88})
+    elif status == "overload":
+        style.update({"weight": 7, "opacity": 0.95})
+    if line.metadata.get("is_bottleneck") is True:
+        if status == "normal":
+            style["color"] = "#f97316"
+        style["weight"] = max(int(style["weight"]), 6)
+        style["opacity"] = max(float(style["opacity"]), 0.86)
+    return style
+
+
+def line_is_stress_highlighted(line: MapOverlayLine) -> bool:
+    stress_status = line.metadata.get("stress_status")
+    return (
+        stress_status in {"warning", "critical", "overload"}
+        or line.metadata.get("is_bottleneck") is True
+    )
+
+
+def split_overlay_lines_by_highlight(
+    lines: list[MapOverlayLine],
+) -> tuple[list[MapOverlayLine], list[MapOverlayLine]]:
+    base_lines: list[MapOverlayLine] = []
+    highlighted_lines: list[MapOverlayLine] = []
+    for line in lines:
+        if line_is_stress_highlighted(line):
+            highlighted_lines.append(line)
+        else:
+            base_lines.append(line)
+    return base_lines, highlighted_lines
+
+
 def route_style_for_overlay_route(route: MapOverlayRoute) -> dict[str, Any]:
     """Style active app simulation routes distinctly from ranked recommendations."""
     display_status = str(route.metadata.get("display_status", ""))
+    scenario_color = route.metadata.get("scenario_color")
+    if isinstance(scenario_color, str) and scenario_color.strip():
+        return {
+            "color": scenario_color.strip(),
+            "weight": 6,
+            "opacity": 0.95,
+            "dash_array": None,
+        }
     if route.metadata.get("landing_visible") is True or display_status in {
         "active_simulation",
         "optimal_route",
@@ -263,6 +329,14 @@ def _add_tile_layer(folium: Any, folium_map: Any, map_capability: MapCapability)
     ).add_to(folium_map)
 
 
+def _line_tooltip(line: MapOverlayLine, line_id: str) -> str:
+    status = line.metadata.get("stress_status", line.status)
+    utilization = line.metadata.get("stress_utilization")
+    if isinstance(utilization, (float, int)):
+        return f"{line_id} | {line.label} | {status} | 이용률 {utilization:.1%}"
+    return f"{line_id} | {line.label} | {status}"
+
+
 def _add_overlay_line(
     folium: Any,
     folium_map: Any,
@@ -270,7 +344,7 @@ def _add_overlay_line(
     *,
     selected: bool,
 ) -> None:
-    style = line_style_for_status(line.status, selected=selected)
+    style = line_style_for_overlay_line(line, selected=selected)
     line_id = line_id_from_overlay_line(line)
     folium.PolyLine(
         locations=[
@@ -280,7 +354,7 @@ def _add_overlay_line(
         color=style["color"],
         weight=style["weight"],
         opacity=style["opacity"],
-        tooltip=f"{line_id} | {line.label} | {line.status}",
+        tooltip=_line_tooltip(line, line_id),
     ).add_to(folium_map)
 
 
@@ -318,6 +392,9 @@ def _add_overlay_point(folium: Any, folium_map: Any, point: MapOverlayPoint) -> 
 def point_style_for_overlay_point(point: MapOverlayPoint) -> dict[str, Any]:
     if point.status == "selected":
         return {"color": "#7c3aed", "fill_color": "#a78bfa", "fill_opacity": 0.95, "radius": 9, "weight": 3}
+    stress_style = _point_stress_style(point)
+    if stress_style is not None:
+        return stress_style
     if point.kind == "tower_candidate":
         return {"color": "#047857", "fill_color": "#34d399", "fill_opacity": 0.9, "radius": 7, "weight": 2}
     if point.kind == "route_point":
@@ -329,10 +406,31 @@ def point_style_for_overlay_point(point: MapOverlayPoint) -> dict[str, Any]:
     return {"color": "#334155", "fill_color": "#cbd5e1", "fill_opacity": 0.85, "radius": 5, "weight": 2}
 
 
+def _point_stress_style(point: MapOverlayPoint) -> dict[str, Any] | None:
+    if point.kind not in {"power_plant", "transmission_tower"}:
+        return None
+
+    risk_level = point.metadata.get("stress_node_risk_level")
+    if risk_level == "critical":
+        return {"color": "#7f1d1d", "fill_color": "#dc2626", "fill_opacity": 0.96, "radius": 10, "weight": 4}
+    if risk_level == "high":
+        return {"color": "#b91c1c", "fill_color": "#ef4444", "fill_opacity": 0.94, "radius": 9, "weight": 3}
+    if risk_level == "medium":
+        return {"color": "#d97706", "fill_color": "#f59e0b", "fill_opacity": 0.92, "radius": 8, "weight": 3}
+    return None
+
+
 def _point_popup_html(point: MapOverlayPoint) -> str:
-    return (
+    html = (
         f"<strong>{point.label}</strong><br>"
         f"x: {point.longitude:.6f}<br>"
         f"y: {point.latitude:.6f}<br>"
         f"kind: {point.kind}"
     )
+    max_utilization = point.metadata.get("stress_node_max_connected_utilization")
+    if isinstance(max_utilization, (float, int)):
+        html += f"<br>node max utilization: {max_utilization:.1%}"
+    max_line_id = point.metadata.get("stress_node_max_connected_line_id")
+    if isinstance(max_line_id, str) and max_line_id:
+        html += f"<br>max line: {max_line_id}"
+    return html
