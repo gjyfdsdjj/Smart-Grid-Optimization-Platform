@@ -28,3 +28,6 @@ data/private/*
 service-account*.json
 
 .claude/
+
+data/processed/grid_line_flow_history.csv
+data/processed/grid_node_load_history.csv

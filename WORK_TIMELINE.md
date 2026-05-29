@@ -1941,3 +1941,28 @@
 - 검증:
   - 후속 정적/빠른 회귀 검증에서 함께 확인한다.
 - 다음 작업: 실제 화면에서 새 세션 기준 토글이 꺼진 상태로 시작하는지 확인한다.
+
+### 2026-05-29 README 대용량 CSV 공유 링크 추가
+- 작업: GitHub 용량 제한으로 저장소에서 제외한 processed 대용량 CSV 2개의 공유 드라이브 링크와 로컬 배치 경로를 README에 추가했다.
+- 수정 파일: `README.md`, `WORK_TIMELINE.md`
+- 검증:
+  - `git check-ignore -v data/processed/grid_line_flow_history.csv data/processed/grid_node_load_history.csv` -> 두 파일 모두 `.gitignore` 규칙 적용 확인
+  - `git diff --check -- README.md WORK_TIMELINE.md` -> 통과
+- 다음 작업: 커밋 전 staged 목록에 `data/processed/grid_line_flow_history.csv`, `data/processed/grid_node_load_history.csv`가 없는지 확인한다.
+
+### 2026-05-29 README 전체 구조/활용 포지션 재작성
+- 작업: 저장소의 디렉토리/파일 인벤토리, 핵심 서비스/엔진/데이터/모델/테스트 구조, processed 대용량 CSV와 발표 문서를 확인한 뒤 README를 통합 안내 문서로 전면 재작성했다.
+- 수정 파일: `README.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - SGOP가 실제 산업 운영용 정밀 계통 해석 도구가 아니라, 비전문가 교육·정책 브리핑·발표 데모·초기 설명용 라이브 시뮬레이터라는 포지션을 README 초반에 명시했다.
+  - 통합 운영 콘솔, legacy multipage, `src/` 계층, `data/`, `models/`, `scripts/`, `tests/`, `docs/`, `presentation/`의 역할을 한 문서에서 볼 수 있게 정리했다.
+  - 공공 수요 데이터와 simulated grid 기반이라는 주장 가능 범위와 실제 운영 판단에 쓰면 안 되는 한계를 분리해 적었다.
+  - 대용량 CSV 공유 드라이브 링크, `.gitignore` 적용 파일, 모델 평가 지표, 실행/검증/재학습 명령을 README에 통합했다.
+- 검증:
+  - `find . -path './.git' -prune -o -path './.venv' -prune -o -path './.venv-tf' -prune -o -type d -print | sort` -> 프로젝트 디렉토리 구조 확인
+  - `rg --files --hidden -g '!.git' | sort` -> 저장소 파일 인벤토리 확인
+  - `rg -n "^(class|def|@dataclass|async def) " app.py pages src scripts tests --glob '*.py'` -> 주요 코드 구조 확인
+  - `wc -l data/grid/enhanced/*.csv data/grid/mock/*.csv data/processed/*.csv data/raw/*.csv data/weather/*.csv` -> 데이터 파일 규모 확인
+  - `git check-ignore -v data/processed/grid_line_flow_history.csv data/processed/grid_node_load_history.csv` -> 대용량 CSV ignore 적용 확인
+  - `git diff --check -- README.md WORK_TIMELINE.md` -> 통과
+- 다음 작업: README 문구와 발표 자료 문구가 충돌하지 않는지 발표 직전 최종 확인한다.
