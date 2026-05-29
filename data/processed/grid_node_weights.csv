@@ -1,0 +1,37 @@
+node_id,node_name,node_type,region,source,source_id,base_load_mw,load_weight,generation_capacity_mw,generation_weight,is_load_node,is_generation_node,calibration_reason
+PLANT_BUSAN,부산 발전소,power_plant,동남권,csv,busan,0.0,0.0,1520.0,0.0471011125,False,True,발전소 capacity_mw x availability 기준으로 발전량 배분 가중치를 계산한다.
+PLANT_DANGJIN,당진 발전소,power_plant,충청권,csv,dangjin,0.0,0.0,5340.0,0.1654736451,False,True,발전소 capacity_mw x availability 기준으로 발전량 배분 가중치를 계산한다.
+PLANT_GWANGJU,광주 발전소,power_plant,호남권,csv,gwangju,0.0,0.0,1140.0,0.0353258343,False,True,발전소 capacity_mw x availability 기준으로 발전량 배분 가중치를 계산한다.
+PLANT_HADONG,하동 발전소,power_plant,경남권,csv,hadong,0.0,0.0,3520.0,0.1090762604,False,True,발전소 capacity_mw x availability 기준으로 발전량 배분 가중치를 계산한다.
+PLANT_INCHEON,인천 발전소,power_plant,수도권,csv,incheon,0.0,0.0,1710.0,0.0529887515,False,True,발전소 capacity_mw x availability 기준으로 발전량 배분 가중치를 계산한다.
+PLANT_POHANG,포항 발전소,power_plant,영남권,csv,pohang,0.0,0.0,1034.0,0.0320411515,False,True,발전소 capacity_mw x availability 기준으로 발전량 배분 가중치를 계산한다.
+PLANT_SAMCHEOK,삼척 발전소,power_plant,강원권,csv,samcheok,0.0,0.0,1827.0,0.0566142977,False,True,발전소 capacity_mw x availability 기준으로 발전량 배분 가중치를 계산한다.
+PLANT_SOKCHO,속초 발전소,power_plant,강원권,csv,sokcho,0.0,0.0,651.0,0.0201729107,False,True,발전소 capacity_mw x availability 기준으로 발전량 배분 가중치를 계산한다.
+PLANT_TAEAN,태안 발전소,power_plant,충청권,csv,taean,0.0,0.0,3520.0,0.1090762604,False,True,발전소 capacity_mw x availability 기준으로 발전량 배분 가중치를 계산한다.
+PLANT_ULSAN,울산 발전소,power_plant,동남권,csv,ulsan,0.0,0.0,2304.0,0.0713953705,False,True,발전소 capacity_mw x availability 기준으로 발전량 배분 가중치를 계산한다.
+PLANT_WOLSEONG,월성 발전소,power_plant,경북권,csv,wolseong,0.0,0.0,4277.0,0.1325338539,False,True,발전소 capacity_mw x availability 기준으로 발전량 배분 가중치를 계산한다.
+PLANT_YEONGGWANG,영광 발전소,power_plant,호남권,csv,yeonggwang,0.0,0.0,5428.0,0.1682005516,False,True,발전소 capacity_mw x availability 기준으로 발전량 배분 가중치를 계산한다.
+TOWER_CHANGWON,창원 송전탑,transmission_tower,경남권,csv,changwon,780.0,0.0555555556,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_CHEONGJU,청주 송전탑,transmission_tower,충청권,csv,cheongju,620.0,0.0441595442,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_CHUNCHEON,춘천 송전탑,transmission_tower,강원권,csv,chuncheon,430.0,0.0306267806,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_DAEGU,대구 송전탑,transmission_tower,영남권,csv,daegu,1050.0,0.0747863248,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_DAEJEON,대전 송전탑,transmission_tower,충청권,csv,daejeon,850.0,0.0605413105,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_DANGJIN,당진 송전탑,transmission_tower,충청권,csv,dangjin,520.0,0.037037037,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_GANGNEUNG,강릉 송전탑,transmission_tower,강원권,csv,gangneung,520.0,0.037037037,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_GEOCHANG,거창 송전탑,transmission_tower,경남권,csv,geochang,480.0,0.0341880342,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_GUMI,구미 송전탑,transmission_tower,경북권,csv,gumi,620.0,0.0441595442,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_HADONG,하동 송전탑,transmission_tower,경남권,csv,hadong,300.0,0.0213675214,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_HAENAM,해남 송전탑,transmission_tower,호남권,csv,haenam,340.0,0.0242165242,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_JEJU,제주도 송전탑,transmission_tower,제주권,csv,jeju,380.0,0.0270655271,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_JEONJU,전주 송전탑,transmission_tower,호남권,csv,jeonju,520.0,0.037037037,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_NAJU,나주 송전탑,transmission_tower,호남권,csv,naju,480.0,0.0341880342,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_PYEONGTAEK,평택 송전탑,transmission_tower,수도권,csv,pyeongtaek,720.0,0.0512820513,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_SAMCHEOK,삼척 송전탑,transmission_tower,강원권,csv,samcheok,320.0,0.0227920228,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_SANGJU,상주 송전탑,transmission_tower,경북권,csv,sangju,360.0,0.0256410256,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_SEOUL,서울 송전탑,transmission_tower,수도권,csv,seoul,1700.0,0.1210826211,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_SUWON,수원 송전탑,transmission_tower,수도권,csv,suwon,1250.0,0.089031339,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_TAEAN,태안 송전탑,transmission_tower,충청권,csv,taean,260.0,0.0185185185,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_WOLSEONG,월성 송전탑,transmission_tower,경북권,csv,wolseong,360.0,0.0256410256,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_WONJU,원주 송전탑,transmission_tower,강원권,csv,wonju,460.0,0.0327635328,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_YEONGCHEON,영천 송전탑,transmission_tower,경북권,csv,yeongcheon,410.0,0.0292022792,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.
+TOWER_YEONGGWANG,영광 송전탑,transmission_tower,호남권,csv,yeonggwang,310.0,0.0220797721,0.0,0.0,True,False,enhanced grid base_load_mw 기준으로 공공 전국 수요를 재분배한다.

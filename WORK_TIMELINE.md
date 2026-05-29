@@ -1701,3 +1701,243 @@
   - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 198개 통과, 16개 deselected
   - `git diff --check -- app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py WORK_TIMELINE.md` -> 통과
 - 다음 작업: 발표용 고정 시연 시나리오를 정하고, Baseline과 LSTM+Neural GNN(beta)의 차이가 가장 잘 보이는 부하 배율/송전 시나리오 조합을 저장한다.
+
+### 2026-05-29 데이터 보정 및 학습 데이터 주장 범위 문서화
+- 작업: 공공 전력 수요 데이터를 SGOP simulated grid에 맞게 재분배해 LSTM/GNN 학습과 DC Power Flow 분석에 사용한다는 데이터 주장 범위를 문서화했다. 실제 기관 송전망 원장 데이터 사용 주장과 공공 데이터 기반 시뮬레이션 데이터셋 주장을 구분하고, 후속 데이터 가공 산출물 기준을 고정했다.
+- 수정 파일: `docs/DATA_CALIBRATION_METHOD.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `data/raw/sukub*.csv`, `data/grid/enhanced/*.csv`, `models/lstm`, `models/gnn`의 출처/성격/주장 가능 범위를 표로 정리했다.
+  - 발표에서 말할 수 있는 표현과 피해야 하는 표현을 분리해 데이터 객관성 방어 기준을 만들었다.
+  - 공공 전력 수요 데이터, node load weight, 발전소/송전망 구조, DC Power Flow 결과, LSTM/GNN 예측 결과의 객관성 수준을 단계별로 정의했다.
+  - 후속 산출물로 `national_load_hourly.csv`, `grid_node_weights.csv`, `grid_node_load_history.csv`, `grid_line_flow_history.csv`의 필수 컬럼을 정했다.
+  - LSTM은 노드별 부하 시계열 예측, Neural GNN은 GridLine adjacency를 반영한 graph-temporal 예측이라는 학습 의미를 구분했다.
+  - app/발표 표기 문구를 `공공 수요 데이터 기반 simulated grid`로 고정했다.
+- 검증:
+  - 문서 전용 변경이라 Python compile/test는 실행하지 않았다.
+  - `docs/DATA_CALIBRATION_METHOD.md` 신규 파일 내용을 확인하고, 기존 코드 파일은 수정하지 않았다.
+- 다음 작업: 공공 수요 데이터를 명시적인 `data/processed/national_load_hourly.csv` 산출물로 정리하고, SGOP GridNode별 부하 가중치 파일을 생성한다.
+
+### 2026-05-29 공공 수요 데이터 hourly processed 산출물 생성
+- 작업: 데이터 객관성 강화 2번 작업으로 `data/raw/sukub*.csv` 공공 전력 수급 데이터를 공식 processed 입력 파일인 `data/processed/national_load_hourly.csv`로 정리했다.
+- 수정 파일: `src/data/preprocess.py`, `tests/test_public_data_preprocess.py`, `data/processed/national_load_hourly.csv`, `data/processed/README.md`, `docs/DATA_CALIBRATION_METHOD.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `build_national_load_hourly()`를 추가해 기존 `public_data_adapter.load_kpx_national_hourly()` 결과를 고정 스키마로 검증하고 CSV로 저장한다.
+  - 출력 스키마는 `timestamp`, `demand_mw`, `supply_mw`, `source_file`로 고정했다.
+  - timestamp 정렬, 중복 제거, demand/supply 양수 검증을 추가해 후속 GridNode 부하 재분배 입력으로 바로 사용할 수 있게 했다.
+  - 실제 로컬 raw 데이터 기준 `data/processed/national_load_hourly.csv`는 11,127개 데이터 행을 담고, 기간은 `2025-02-04 00:00:00`부터 `2026-05-14 12:00:00`까지다.
+  - `source_file`은 현재 통합 원천을 나타내는 `KPX_public_sukub_csv`로 기록했다.
+  - `docs/DATA_CALIBRATION_METHOD.md`와 `data/processed/README.md`에 산출물 기간, 행 수, 컬럼, 처리 방식을 기록했다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/data/preprocess.py tests/test_public_data_preprocess.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_public_data_preprocess.py -q` -> 4개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_public_data_preprocess.py tests/test_prediction_service_contract.py -q` -> 8개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 202개 통과, 16개 deselected
+  - `git diff --check -- src/data/preprocess.py tests/test_public_data_preprocess.py docs/DATA_CALIBRATION_METHOD.md data/processed/README.md data/processed/national_load_hourly.csv WORK_TIMELINE.md` -> 통과
+- 다음 작업: `data/grid/enhanced/nodes.csv`와 `GridPowerProfile.load_weight`를 기준으로 `data/processed/grid_node_weights.csv`를 생성한다.
+
+### 2026-05-29 SGOP GridNode 부하/발전 가중치 산출물 생성
+- 작업: 데이터 객관성 강화 3번 작업으로 공공 전국 수요를 SGOP simulated grid의 노드별 부하/발전 값으로 나누기 위한 `data/processed/grid_node_weights.csv`를 생성했다. 사용자 또는 xAI 승인 노드는 기본 processed 파일에 넣지 않되, 함수 입력으로 `user_installations`를 받아 동적 가중치표를 만들 수 있게 했다.
+- 수정 파일: `src/data/preprocess.py`, `tests/test_public_data_preprocess.py`, `data/processed/grid_node_weights.csv`, `data/processed/README.md`, `docs/DATA_CALIBRATION_METHOD.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `build_grid_node_weights()`와 `normalize_grid_node_weights()`를 추가해 `GridDataset`을 노드별 가중치 표로 변환한다.
+  - 출력 스키마는 `node_id`, `node_name`, `node_type`, `region`, `source`, `source_id`, `base_load_mw`, `load_weight`, `generation_capacity_mw`, `generation_weight`, `is_load_node`, `is_generation_node`, `calibration_reason`으로 고정했다.
+  - 기본 enhanced grid 기준 공식 산출물은 전체 36개 노드, 부하 노드 24개, 발전 노드 12개를 포함한다.
+  - `load_weight`는 기본 송전탑의 `base_load_mw / 전체 기본 송전탑 base_load_mw 합계`로 계산하고, 합계는 1.0이다.
+  - `generation_weight`는 발전소 `capacity_mw x availability / 전체 발전 가능 용량 합계`로 계산하고, 합계는 1.0이다.
+  - 사용자/xAI 승인 송전탑은 기본적으로 경로 보강 노드로 취급해 동적 가중치표에서 `load_weight=0`, `generation_weight=0`으로 둔다.
+  - 사용자 추가 발전소는 `capacity_mw x availability` 기준으로 동적 `generation_weight`에 반영한다.
+  - `docs/DATA_CALIBRATION_METHOD.md`와 `data/processed/README.md`에 계산 공식, 노드 수, 사용자/xAI 노드 처리 규칙을 기록했다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/data/preprocess.py tests/test_public_data_preprocess.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_public_data_preprocess.py -q` -> 6개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_public_data_preprocess.py tests/test_grid_csv_loader.py tests/test_prediction_service_contract.py -q` -> 15개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 204개 통과, 16개 deselected
+  - `git diff --check -- src/data/preprocess.py tests/test_public_data_preprocess.py docs/DATA_CALIBRATION_METHOD.md data/processed/README.md data/processed/grid_node_weights.csv WORK_TIMELINE.md` -> 통과
+- 다음 작업: `national_load_hourly.csv`와 `grid_node_weights.csv`를 결합해 `data/processed/grid_node_load_history.csv`를 생성한다.
+
+### 2026-05-29 SGOP GridNode 시간별 부하 이력 산출물 생성
+- 작업: 데이터 객관성 강화 4번 작업으로 `national_load_hourly.csv`와 `grid_node_weights.csv`를 결합해 LSTM/GNN 학습 기준 파일인 `data/processed/grid_node_load_history.csv`를 생성했다.
+- 수정 파일: `src/data/preprocess.py`, `tests/test_public_data_preprocess.py`, `data/processed/grid_node_load_history.csv`, `data/processed/README.md`, `docs/DATA_CALIBRATION_METHOD.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `build_grid_node_load_history()`와 `normalize_grid_node_load_history()`를 추가해 전국 공공 수급 시계열을 SGOP GridNode별 시간대 부하/공급 가능량 proxy로 재분배한다.
+  - 출력 스키마는 `timestamp`, `node_id`, `node_name`, `node_type`, `region`, `load_mw`, `generation_mw`, `net_injection_mw`, `load_weight`, `generation_weight`, `national_demand_mw`, `national_supply_mw`, `grid_total_load_mw`, `grid_total_generation_mw`, `scale_to_grid`, `source`로 고정했다.
+  - 현재 파일은 11,127개 timestamp와 36개 GridNode를 결합한 400,572개 데이터 행을 담는다.
+  - 기간은 `2025-02-04 00:00:00`부터 `2026-05-14 12:00:00`까지이며, 기본 enhanced grid 기준 부하 노드 24개와 발전 노드 12개를 포함한다.
+  - `scale_to_grid`는 `DEFAULT_GRID_TOTAL_LOAD_MW / national_demand_mw 중앙값`으로 계산하며 현재 값은 `0.114652`다.
+  - `load_mw`는 `grid_total_load_mw x load_weight`, `generation_mw`는 `grid_total_generation_mw x generation_weight`, `net_injection_mw`는 `generation_mw - load_mw`로 계산한다.
+  - `generation_mw`는 실제 발전소별 실측 발전량이 아니라 KPX 공개 공급능력 계열을 SGOP 발전소 가중치로 나눈 학습용 공급 가능량 proxy임을 문서에 명시했다.
+  - timestamp별 `load_mw` 합계, `generation_mw` 합계, `net_injection_mw` 합계가 각각 grid total과 맞는지 검증한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/data/preprocess.py tests/test_public_data_preprocess.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_public_data_preprocess.py -q` -> 8개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_public_data_preprocess.py tests/test_prediction_service_contract.py tests/test_grid_csv_loader.py -q` -> 17개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 206개 통과, 16개 deselected
+  - `git diff --check -- src/data/preprocess.py docs/DATA_CALIBRATION_METHOD.md data/processed/README.md WORK_TIMELINE.md` -> 통과
+- 다음 작업: `grid_node_load_history.csv`를 입력으로 시간별 DC Power Flow를 실행해 `data/processed/grid_line_flow_history.csv` 선로 라벨 파일을 생성한다.
+
+### 2026-05-29 SGOP GridLine 시간별 DC Power Flow 라벨 산출물 생성
+- 작업: 데이터 객관성 강화 5번 작업으로 `grid_node_load_history.csv`를 timestamp별 GridPowerProfile로 변환하고, DC Power Flow를 실행해 선로별 flow/utilization/risk 라벨인 `data/processed/grid_line_flow_history.csv`를 생성했다.
+- 수정 파일: `src/data/preprocess.py`, `tests/test_public_data_preprocess.py`, `data/processed/grid_line_flow_history.csv`, `data/processed/README.md`, `docs/DATA_CALIBRATION_METHOD.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `build_grid_line_flow_history()`와 `normalize_grid_line_flow_history()`를 추가해 노드별 부하 이력을 선로별 조류 이력으로 변환한다.
+  - 출력 스키마는 `timestamp`, `line_id`, `from_node_id`, `to_node_id`, `from_node_name`, `to_node_name`, `flow_mw`, `abs_flow_mw`, `capacity_mw`, `utilization`, `status`, `risk_level`, `loss_mw`, `from_angle_deg`, `to_angle_deg`, `angle_delta_deg`, `slack_bus_id`, `reactance_pu`, `line_status_source`, `source`로 고정했다.
+  - 현재 파일은 11,127개 timestamp와 44개 GridLine을 결합한 489,588개 데이터 행을 담는다.
+  - 기간은 `2025-02-04 00:00:00`부터 `2026-05-14 12:00:00`까지이며, 최대 이용률은 `0.9297`이다.
+  - `grid_node_load_history.csv`의 `generation_mw`는 KPX 공급능력 proxy이므로, 선로 라벨 계산에는 `grid_total_load_mw x generation_weight`로 재배분한 balanced dispatch를 사용한다.
+  - 기존 `dc_power_flow.solve()`와 `compute_line_statuses()`를 재사용해 Monitoring과 같은 status/risk_level 기준을 유지한다.
+  - 상태 분포는 `normal=487,414`, `warning=2,161`, `critical=13`, `overload=0`이다.
+  - 위험도 분포는 `low=481,337`, `medium=7,031`, `high=1,207`, `critical=13`이다.
+  - 이 산출물이 실제 선로별 계측 조류가 아니라 SGOP simulated grid에 DC Power Flow를 적용한 학습/검증용 라벨임을 문서에 명시했다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/data/preprocess.py tests/test_public_data_preprocess.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_public_data_preprocess.py -q` -> 11개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_public_data_preprocess.py tests/test_prediction_service_contract.py tests/test_grid_csv_loader.py -q` -> 20개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 209개 통과, 16개 deselected
+  - `git diff --check -- src/data/preprocess.py tests/test_public_data_preprocess.py docs/DATA_CALIBRATION_METHOD.md data/processed/README.md WORK_TIMELINE.md` -> 통과
+- 다음 작업: `grid_line_flow_history.csv`를 Prediction/LSTM/GNN 학습 입력 또는 평가 라벨로 연결하는 방식을 정리한다.
+
+### 2026-05-29 Prediction processed 데이터 입력/평가 라벨 연결
+- 작업: 데이터 객관성 강화 6번 작업으로 `grid_node_load_history.csv`를 Baseline/LSTM/GNN/Neural GNN 계열의 1순위 입력으로 연결하고, `grid_line_flow_history.csv`를 Prediction metadata의 DC Power Flow 평가 라벨로 연결했다.
+- 수정 파일: `src/data/loaders.py`, `src/services/prediction_service.py`, `app.py`, `tests/test_grid_csv_loader.py`, `tests/test_prediction_service_contract.py`, `data/processed/README.md`, `docs/DATA_CALIBRATION_METHOD.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `load_processed_grid_node_history()`와 `load_processed_grid_line_flow_history()`를 추가해 processed CSV를 런타임에서 검증해 읽을 수 있게 했다.
+  - `summarize_processed_grid_line_flow_history()`를 추가해 143MB 규모의 선로 라벨 전체를 매번 들고 있지 않고 Prediction metadata에 필요한 평가 라벨 요약만 캐시해 제공한다.
+  - `PredictionService._load_grid_history()`는 이제 `data/processed/grid_node_load_history.csv`를 먼저 읽고, 현재 GridDataset의 Prediction 대상 node_id와 맞지 않거나 파일이 없으면 기존 KPX raw 재분배 경로로 fallback한다.
+  - processed node history를 예측 엔진 호환용 `bus_id = GridNode.node_id` 형태로 변환하되, 외부 파일과 metadata에서는 `node_id` 의미를 유지한다.
+  - Baseline/LSTM/GNN/Neural GNN/Hybrid 결과 metadata에 `history_source`, `processed_node_history_used`, `node_history_node_count`, `processed_line_history_used`, `line_flow_history_line_count`, `line_flow_history_max_utilization` 등을 기록한다.
+  - app Prediction 패널에는 학습 입력, 평가 라벨, processed 노드/선로 수가 표시되도록 했다.
+  - `docs/DATA_CALIBRATION_METHOD.md`의 현재 Prediction 흐름을 processed 우선 흐름으로 갱신했다.
+  - 실제 확인 기준 Baseline Prediction metadata는 `history_source=data/processed/grid_node_load_history.csv`, `processed_node_history_used=True`, `node_history_node_count=24`, `processed_line_history_used=True`, `line_flow_history_line_count=44`로 반환된다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/data/loaders.py src/services/prediction_service.py app.py tests/test_grid_csv_loader.py tests/test_prediction_service_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_grid_csv_loader.py tests/test_prediction_service_contract.py -q` -> 12개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_grid_csv_loader.py tests/test_prediction_service_contract.py tests/test_public_data_preprocess.py tests/test_app_landing_contract.py -q` -> 66개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 212개 통과, 16개 deselected
+  - `git diff --check -- src/data/loaders.py src/services/prediction_service.py app.py tests/test_grid_csv_loader.py tests/test_prediction_service_contract.py docs/DATA_CALIBRATION_METHOD.md data/processed/README.md WORK_TIMELINE.md` -> 통과
+- 다음 작업: processed 선로 라벨을 이용해 Baseline/LSTM/GNN 모델별 노드 부하 MAE와 선로 이용률 MAE 비교 지표를 app Prediction 비교 탭에 추가한다.
+
+### 2026-05-29 Prediction processed 입력 fallback 조건 보정
+- 작업: app에서 Neural GNN 또는 LSTM+Neural GNN(beta)을 선택했을 때 학습 입력이 `KPX CSV redistributed to GridNode`로 표시되는 문제를 확인하고 수정했다.
+- 수정 파일: `src/services/prediction_service.py`, `app.py`, `tests/test_prediction_service_contract.py`, `WORK_TIMELINE.md`
+- 원인:
+  - 기본 GridDataset에서는 processed 입력을 정상 사용했다.
+  - 랜딩에서 사용자/xAI 송전탑이 추가되면 `USER_TOWER_*` node_id가 Prediction 대상에 포함됐고, 이 node_id는 `grid_node_load_history.csv`에 없어서 전체 Prediction 입력이 KPX raw 재분배 경로로 fallback됐다.
+  - Streamlit session state의 기존 Prediction cache도 같은 화면에서 이전 결과를 계속 보여줄 수 있었다.
+- 유기적 동작:
+  - `PredictionService._prediction_nodes()`에서 `user_transmission_tower`를 부하 예측 대상에서 제외했다. 사용자/xAI 송전탑은 경로 보강 노드이고 별도 부하 수요 노드가 아니라는 이전 데이터 보정 기준과 맞췄다.
+  - app Prediction cache key에 `_PREDICTION_DATA_VERSION="processed-grid-history-v2"`를 추가해 기존 session_state 캐시가 새 processed 입력 연결 결과를 가로막지 않도록 했다.
+  - 사용자 송전탑이 있는 GridDataset에서도 Baseline/Neural GNN metadata가 `history_source=data/processed/grid_node_load_history.csv`, `processed_node_history_used=True`, `node_history_node_count=24`, `prediction_node_count=24`로 유지되는 것을 확인했다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/services/prediction_service.py tests/test_prediction_service_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_prediction_service_contract.py tests/test_app_landing_contract.py -q` -> 49개 통과
+  - 사용자 송전탑 포함 Baseline/Neural GNN metadata 수동 확인 -> `data/processed/grid_node_load_history.csv`, `processed_node_history_used=True`
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 213개 통과, 16개 deselected
+  - `git diff --check -- app.py src/services/prediction_service.py tests/test_prediction_service_contract.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: app 화면에서 Prediction을 다시 선택해 `학습 입력: data/processed/grid_node_load_history.csv`와 `평가 라벨: data/processed/grid_line_flow_history.csv`가 표시되는지 확인한다.
+
+### 2026-05-29 LSTM processed GridNode 부하 이력 재학습 및 평가 지표 연결
+- 작업: 데이터 객관성 강화 7번 작업으로 `data/processed/grid_node_load_history.csv`의 송전탑 24개 부하 이력을 사용해 LSTM을 재학습하고, 학습 이력/holdout 평가 지표를 Prediction metadata와 app 패널에 연결했다.
+- 수정 파일: `src/engine/forecast/lstm_forecaster.py`, `src/services/prediction_service.py`, `app.py`, `scripts/train_lstm_from_processed.py`, `tests/test_prediction_service_contract.py`, `models/lstm/model.keras`, `models/lstm/scalers.pkl`, `models/lstm/training_history.csv`, `models/lstm/evaluation_summary.json`, `data/processed/model_evaluation_summary.csv`, `models/lstm/README.md`, `data/processed/README.md`, `docs/DATA_CALIBRATION_METHOD.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `scripts/train_lstm_from_processed.py`를 추가해 processed GridNode 이력에서 `node_type=transmission_tower`, `load_mw > 0` 노드만 학습 대상으로 변환한다.
+  - 입력 스키마는 모델 호환을 위해 `node_id -> bus_id`, `node_name -> bus_name` alias를 사용하지만 값은 `TOWER_*` GridNode ID를 유지한다.
+  - 시간 순서 기준 마지막 15%를 holdout 테스트 구간으로 두고, 학습 구간의 마지막 10%를 Keras validation split으로 사용한다.
+  - 이번 재학습은 `epochs=5`, `batch_size=512`, `lookback_h=24`, `horizon_h=24`로 실행했다.
+  - 학습 대상은 24개 송전탑 노드, 267,048개 node-hour 행이며 기간은 `2025-02-04 00:00:00`부터 `2026-05-14 12:00:00`까지다.
+  - 학습 구간은 `2025-02-04 00:00:00`부터 `2026-03-05 00:00:00`, 테스트 구간은 `2026-03-05 01:00:00`부터 `2026-05-14 12:00:00`까지다.
+  - `models/lstm/training_history.csv`에는 5개 epoch의 `loss`, `mae`, `val_loss`, `val_mae`, `learning_rate`가 저장된다.
+  - 최종 학습 이력은 `loss=0.005716`, `mae=0.056419`, `val_loss=0.004031`, `val_mae=0.044826`이다.
+  - `models/lstm/evaluation_summary.json`에는 holdout 평가 지표를 저장한다. 이번 결과는 `MAE=18.5652 MW`, `RMSE=29.8622 MW`, `MAPE=7.1831%`, 평가 sample 수 `40,056`, forecast_start 수 `71`이다.
+  - `data/processed/model_evaluation_summary.csv`는 모델별 평가 비교용 누적 요약 파일이며 기존 `lstm` 행은 새 결과로 교체한다.
+  - `LSTMForecaster.training_metadata()`를 추가해 모델 경로, scaler 경로, 학습 이력 경로, epoch 수, 최종 loss, best val_loss, holdout 평가 지표를 한 번에 반환한다.
+  - `PredictionService.run_lstm_prediction()`, `run_hybrid_prediction()`, `run_hybrid_neural_gnn_prediction()` 결과 metadata에 LSTM 학습/평가 산출물 정보를 포함한다.
+  - app Prediction 패널은 LSTM 계열 모델 선택 시 `LSTM 평가: MAE 18.57 MW | RMSE 29.86 MW | MAPE 7.18%` 형태로 지표를 표시할 수 있다.
+  - `docs/DATA_CALIBRATION_METHOD.md`와 `models/lstm/README.md`에 재학습 입력, 산출물, 평가 방식, 주장 가능 범위를 문서화했다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/engine/forecast/lstm_forecaster.py src/services/prediction_service.py app.py scripts/train_lstm_from_processed.py tests/test_prediction_service_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_prediction_service_contract.py -q` -> 7개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python scripts/train_lstm_from_processed.py --epochs 5 --batch-size 512 --eval-step-h 24` -> 통과
+  - `PredictionService().run_lstm_prediction(raw_dir="data/raw", retrain=False)` 수동 확인 -> `source=lstm`, `fallback=none`, `history_source=data/processed/grid_node_load_history.csv`, `processed_node_history_used=True`, `evaluation_summary_path=models/lstm/evaluation_summary.json`, 예측 576개, 미래 위험 선로 4개
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests scripts` -> 통과
+  - `git diff --check -- app.py src/services/prediction_service.py src/engine/forecast/lstm_forecaster.py scripts/train_lstm_from_processed.py tests/test_prediction_service_contract.py docs/DATA_CALIBRATION_METHOD.md data/processed/README.md models/lstm/README.md WORK_TIMELINE.md` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 214개 통과, 16개 deselected
+- 다음 작업: Neural GNN도 같은 processed grid history와 line flow label 기준으로 재학습/평가해 `data/processed/model_evaluation_summary.csv`에 모델 비교 행을 추가한다.
+
+### 2026-05-29 Neural GNN processed GridNode 부하 이력 재학습 및 LSTM 비교 지표 연결
+- 작업: 데이터 객관성 강화 8번 작업으로 `data/processed/grid_node_load_history.csv`와 `data/grid/enhanced/lines.csv` GridLine topology를 사용해 Neural GNN을 재학습하고, LSTM과 같은 holdout 평가 요약을 추가했다.
+- 수정 파일: `src/engine/forecast/neural_gnn_forecaster.py`, `app.py`, `scripts/train_neural_gnn_from_processed.py`, `tests/test_prediction_service_contract.py`, `models/gnn/model.pt`, `models/gnn/training_history.csv`, `models/gnn/metadata.json`, `models/gnn/evaluation_summary.json`, `models/gnn/node_error_summary.csv`, `data/processed/model_evaluation_summary.csv`, `models/gnn/README.md`, `data/processed/README.md`, `docs/DATA_CALIBRATION_METHOD.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `scripts/train_neural_gnn_from_processed.py`를 추가해 processed GridNode 이력에서 `node_type=transmission_tower`, `load_mw > 0` 노드만 학습 대상으로 변환한다.
+  - 입력 스키마는 모델 호환을 위해 `node_id -> bus_id`, `node_name -> bus_name` alias를 사용하지만 값은 `TOWER_*` GridNode ID를 유지한다.
+  - Graph edge는 `data/grid/enhanced/lines.csv`의 활성 GridLine 44개를 사용한다. adjacency 정규화 단계에서는 학습 대상 node_id에 없는 edge endpoint가 자동 제외될 수 있지만, 데이터 출처는 전체 GridLine topology로 기록한다.
+  - 이번 재학습은 `epochs=5`, `batch_size=512`, `learning_rate=0.003`, `hidden_dim=32`, `lookback_h=24`, `horizon_h=24`로 실행했다.
+  - 학습 대상은 24개 송전탑 노드, 267,048개 node-hour 행이며 기간은 `2025-02-04 00:00:00`부터 `2026-05-14 12:00:00`까지다.
+  - 학습 구간은 `2025-02-04 00:00:00`부터 `2026-03-05 00:00:00`, 테스트 구간은 `2026-03-05 01:00:00`부터 `2026-05-14 12:00:00`까지다.
+  - `models/gnn/training_history.csv`에는 5개 epoch의 `train_loss`, `val_loss`가 저장된다.
+  - 최종 학습 이력은 `train_loss=0.063859`, `val_loss=0.064518`이다.
+  - `models/gnn/evaluation_summary.json`에는 recursive 24시간 holdout 평가 지표를 저장한다. 이번 결과는 `MAE=15.9315 MW`, `RMSE=25.8080 MW`, `MAPE=5.9857%`, 평가 sample 수 `40,056`, forecast_start 수 `71`이다.
+  - `models/gnn/node_error_summary.csv`를 추가해 송전탑별 MAE/RMSE/MAPE를 확인할 수 있게 했다.
+  - `data/processed/model_evaluation_summary.csv`에는 `lstm`과 `neural_gnn` 두 행이 함께 남는다. 같은 holdout 기준에서 Neural GNN은 LSTM의 `MAE=18.5652 MW`, `RMSE=29.8622 MW`, `MAPE=7.1831%`보다 낮은 오차를 보였다.
+  - `NeuralGNNForecaster.training_metadata()`는 `evaluation_summary.json`과 `node_error_summary.csv`가 있으면 holdout 평가 지표와 경로를 metadata에 병합한다.
+  - app Prediction 패널은 Neural GNN 단독 또는 LSTM+Neural GNN 선택 시 `Neural GNN 평가: MAE 15.93 MW | RMSE 25.81 MW | MAPE 5.99%` 형태로 지표를 표시할 수 있다.
+  - `docs/DATA_CALIBRATION_METHOD.md`, `models/gnn/README.md`, `data/processed/README.md`에 Neural GNN 재학습 입력, 산출물, 평가 방식, 주장 가능 범위를 문서화했다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/engine/forecast/neural_gnn_forecaster.py scripts/train_neural_gnn_from_processed.py tests/test_prediction_service_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_prediction_service_contract.py -q` -> 8개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python scripts/train_neural_gnn_from_processed.py --epochs 5 --batch-size 512 --eval-step-h 24` -> 통과
+  - `PredictionService().run_neural_gnn_prediction(raw_dir="data/raw", retrain=False)` 수동 확인 -> `source=neural_gnn`, `fallback=none`, `history_source=data/processed/grid_node_load_history.csv`, `evaluation_summary_path=models/gnn/evaluation_summary.json`, 예측 576개, 미래 위험 선로 4개
+  - `PredictionService().run_hybrid_neural_gnn_prediction(raw_dir="data/raw", retrain=False)` 수동 확인 -> `source=hybrid_neural_gnn`, `fallback=none`, `lstm_evaluation_summary_path=models/lstm/evaluation_summary.json`, `neural_gnn_evaluation_summary_path=models/gnn/evaluation_summary.json`, 예측 576개, 미래 위험 선로 4개
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests scripts` -> 통과
+  - `git diff --check -- app.py src/engine/forecast/neural_gnn_forecaster.py scripts/train_neural_gnn_from_processed.py tests/test_prediction_service_contract.py docs/DATA_CALIBRATION_METHOD.md data/processed/README.md models/gnn/README.md WORK_TIMELINE.md` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 215개 통과, 16개 deselected
+- 다음 작업: `model_evaluation_summary.csv`를 app Prediction 비교 탭에 표/막대 그래프로 연결하고, 예측 node load를 DC Power Flow에 투입한 선로 이용률 예측 오차까지 모델 비교에 추가한다.
+
+### 2026-05-29 Prediction 모델 비교표/그래프 app 연결 및 baseline/hybrid 평가 요약 추가
+- 작업: 데이터 객관성 강화 9번 작업으로 `data/processed/model_evaluation_summary.csv`를 app의 `Prediction 비교` 탭에 직접 연결하고, Baseline/LSTM/Neural GNN/LSTM+Neural GNN을 같은 holdout 구간에서 비교하는 표와 막대 그래프를 추가했다.
+- 수정 파일: `app.py`, `src/data/loaders.py`, `scripts/evaluate_prediction_models_from_processed.py`, `tests/test_grid_csv_loader.py`, `data/processed/model_evaluation_summary.csv`, `data/processed/README.md`, `docs/DATA_CALIBRATION_METHOD.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `load_model_evaluation_summary()`를 추가해 모델 평가 요약 CSV의 `model`, `mae_mw`, `rmse_mw`, `mape_pct` 핵심 컬럼과 선택적 선로 이용률 오차 컬럼을 검증한다.
+  - `scripts/evaluate_prediction_models_from_processed.py`를 추가해 저장된 LSTM/Neural GNN 모델과 Baseline, LSTM+Neural GNN hybrid를 같은 processed GridNode holdout 구간에서 평가한다.
+  - 현재 평가 구간은 `2026-03-05 01:00:00`부터 `2026-05-14 12:00:00`까지이며, horizon 24h, eval step 24h 기준이다.
+  - 노드 부하 평가 샘플은 40,056개이고, 선로 이용률 proxy 평가 샘플은 73,436개다.
+  - 선로 이용률 지표는 예측 node load로 계산한 endpoint pressure 기반 proxy를 `grid_line_flow_history.csv`의 DC Power Flow 라벨과 비교한 보조 지표다. 실제 계측 선로 조류 인증값으로 주장하지 않는다.
+  - 평가 결과는 Baseline `MAE=35.61 MW`, `RMSE=53.90 MW`, `MAPE=14.36%`, LSTM `MAE=18.57 MW`, `RMSE=29.86 MW`, `MAPE=7.18%`, Neural GNN `MAE=15.93 MW`, `RMSE=25.81 MW`, `MAPE=5.99%`, LSTM+Neural GNN `MAE=16.36 MW`, `RMSE=26.84 MW`, `MAPE=6.32%`다.
+  - app의 `Prediction 비교` 탭은 모델 학습/검증 지표 표와 `노드 부하 MAPE(%)`, `선로 이용률 MAE(pp)` 막대 그래프를 표시한다.
+  - 표에는 Baseline 대비 MAPE 개선률도 함께 표시되어 발표 때 모델 고도화 효과를 정량적으로 설명할 수 있다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/data/loaders.py app.py scripts/evaluate_prediction_models_from_processed.py tests/test_grid_csv_loader.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_grid_csv_loader.py -q` -> 8개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python scripts/evaluate_prediction_models_from_processed.py --eval-step-h 24` -> 통과, 4개 모델 평가 행 생성
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_grid_csv_loader.py tests/test_streamlit_import_safe.py -q` -> 12개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests scripts` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 216개 통과, 16개 deselected
+- 다음 작업: app 화면에서 `Prediction 비교` 탭의 모델 성능표/그래프가 의도대로 표시되는지 확인하고, 발표용으로 Baseline 대비 개선률 문구를 정리한다.
+
+### 2026-05-29 Prediction 모델 검증 지표 토글 표시 추가
+- 작업: app의 `Prediction 비교` 탭에서 모델 성능표와 그래프를 접었다 펼 수 있도록 `성능표/그래프 표시` 토글을 추가했다.
+- 수정 파일: `app.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `모델 학습/검증 지표` 제목은 항상 표시한다.
+  - 토글이 켜져 있으면 기존처럼 설명 문구, 모델 성능표, MAPE/선로 이용률 MAE 막대 그래프를 모두 표시한다.
+  - 토글이 꺼져 있으면 제목과 토글만 남기고 성능표/그래프 영역은 렌더링하지 않는다.
+  - 토글 상태는 `sgop_model_evaluation_details_visible` Streamlit session state key로 유지된다.
+- 검증:
+  - 후속 정적/빠른 회귀 검증에서 함께 확인한다.
+- 다음 작업: 실제 화면에서 토글 off/on 시 `Prediction 비교` 탭의 높이와 주변 표가 의도대로 접히는지 확인한다.
+
+### 2026-05-29 Prediction 모델 검증 지표 기본 접힘 상태 변경
+- 작업: app의 `Prediction 비교` 탭에서 `모델 학습/검증 지표` 상세 영역이 기본적으로 접힌 상태로 보이도록 변경했다.
+- 수정 파일: `app.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `성능표/그래프 표시` 토글의 기본값을 `False`로 바꿨다.
+  - 기존 브라우저 session_state에 남은 켜짐 상태가 기본값을 덮어쓰지 않도록 토글 key를 `sgop_model_evaluation_details_visible_v2`로 변경했다.
+  - 초기 화면에서는 `모델 학습/검증 지표` 제목과 토글만 보이고, 사용자가 토글을 켜면 표/그래프가 표시된다.
+- 검증:
+  - 후속 정적/빠른 회귀 검증에서 함께 확인한다.
+- 다음 작업: 실제 화면에서 새 세션 기준 토글이 꺼진 상태로 시작하는지 확인한다.

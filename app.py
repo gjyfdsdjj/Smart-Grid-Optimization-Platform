@@ -12,7 +12,7 @@ import streamlit as st
 
 from src.config.settings import settings
 from src.data.adapters.vworld_adapter import MapCapability, get_map_capability
-from src.data.loaders import load_grid_dataset_or_default
+from src.data.loaders import load_grid_dataset_or_default, load_model_evaluation_summary
 from src.data.schemas import (
     GridDataset,
     GridImprovementProposal,
@@ -143,6 +143,7 @@ _PREDICTION_MODEL_OPTIONS: tuple[str, ...] = (
     "LSTM+Neural GNN(beta)",
 )
 _PREDICTION_BRIEFING_CACHE_STATE_KEY = "sgop_landing_prediction_briefing_cache"
+_PREDICTION_DATA_VERSION = "processed-grid-history-v2"
 _PREDICTION_EXPECTED_SOURCE_BY_MODEL: dict[str, str] = {
     "Mock": "mock",
     "Baseline": "baseline",
@@ -152,6 +153,25 @@ _PREDICTION_EXPECTED_SOURCE_BY_MODEL: dict[str, str] = {
     "LSTM+GNN": "hybrid",
     "LSTM+Neural GNN(beta)": "hybrid_neural_gnn",
 }
+_MODEL_EVALUATION_LABELS: dict[str, str] = {
+    "baseline": "Baseline",
+    "lstm": "LSTM",
+    "neural_gnn": "Neural GNN",
+    "hybrid_neural_gnn": "LSTM+Neural GNN",
+}
+_MODEL_EVALUATION_ORDER: tuple[str, ...] = (
+    "baseline",
+    "lstm",
+    "neural_gnn",
+    "hybrid_neural_gnn",
+)
+_MODEL_EVALUATION_COLORS: dict[str, str] = {
+    "baseline": "#64748b",
+    "lstm": "#2563eb",
+    "neural_gnn": "#059669",
+    "hybrid_neural_gnn": "#7c3aed",
+}
+_MODEL_EVALUATION_DETAILS_STATE_KEY = "sgop_model_evaluation_details_visible_v2"
 _STRESS_STATUS_FILTERS: tuple[str, ...] = (
     "전체",
     "정상",
@@ -937,6 +957,40 @@ def _render_prediction_control_panel(
 
     st.metric("미래 위험 선로", len(prediction_result.risk_lines))
     st.caption(f"source: {prediction_result.source}")
+    history_source = str(prediction_result.metadata.get("history_source", ""))
+    line_label_source = str(prediction_result.metadata.get("line_label_source", ""))
+    if history_source:
+        st.caption(f"학습 입력: {history_source}")
+    if bool(prediction_result.metadata.get("processed_line_history_used", False)):
+        st.caption(f"평가 라벨: {line_label_source}")
+    node_count = prediction_result.metadata.get("node_history_node_count")
+    line_count = prediction_result.metadata.get("line_flow_history_line_count")
+    if node_count or line_count:
+        st.caption(f"processed 데이터: 노드 {node_count or '-'}개 | 선로 {line_count or '-'}개")
+    lstm_eval = prediction_result.metadata.get("lstm_evaluation_summary")
+    if prediction_result.source == "lstm":
+        lstm_eval = prediction_result.metadata.get("evaluation_summary")
+    if isinstance(lstm_eval, dict):
+        mae = lstm_eval.get("mae_mw")
+        rmse = lstm_eval.get("rmse_mw")
+        mape = lstm_eval.get("mape_pct")
+        if mae is not None and rmse is not None and mape is not None:
+            st.caption(
+                f"LSTM 평가: MAE {float(mae):.2f} MW | "
+                f"RMSE {float(rmse):.2f} MW | MAPE {float(mape):.2f}%"
+            )
+    neural_gnn_eval = prediction_result.metadata.get("neural_gnn_evaluation_summary")
+    if prediction_result.source == "neural_gnn":
+        neural_gnn_eval = prediction_result.metadata.get("evaluation_summary")
+    if isinstance(neural_gnn_eval, dict):
+        mae = neural_gnn_eval.get("mae_mw")
+        rmse = neural_gnn_eval.get("rmse_mw")
+        mape = neural_gnn_eval.get("mape_pct")
+        if mae is not None and rmse is not None and mape is not None:
+            st.caption(
+                f"Neural GNN 평가: MAE {float(mae):.2f} MW | "
+                f"RMSE {float(rmse):.2f} MW | MAPE {float(mape):.2f}%"
+            )
     if prediction_result.fallback.enabled:
         st.caption(f"fallback: {prediction_result.fallback.mode}")
 
@@ -973,6 +1027,8 @@ def _render_prediction_comparison_panel(
     comparison: PredictionBriefingComparison | None,
 ) -> None:
     st.subheader("Prediction 비교")
+    _render_model_evaluation_summary_panel()
+
     if comparison is None:
         st.info("예측 부하 반영을 켜고 Baseline 외 모델을 선택하면 비교 결과가 표시됩니다.")
         return
@@ -1052,6 +1108,160 @@ def _render_prediction_comparison_delta_chart(
         },
     )
     st.plotly_chart(fig, width="stretch")
+
+
+def _render_model_evaluation_summary_panel() -> None:
+    rows, warning = _model_evaluation_summary_rows()
+    st.markdown("**모델 학습/검증 지표**")
+    show_details = st.toggle(
+        "성능표/그래프 표시",
+        value=False,
+        key=_MODEL_EVALUATION_DETAILS_STATE_KEY,
+    )
+    if not show_details:
+        return
+
+    st.caption(
+        "같은 processed GridNode holdout 구간에서 노드 부하 오차와 예측 부하 기반 선로 이용률 proxy의 DC Power Flow 라벨 대비 오차를 비교합니다."
+    )
+    if warning:
+        st.caption(f"평가 요약 파일을 읽지 못했습니다: {warning}")
+    if not rows:
+        st.info("모델 평가 요약이 아직 없습니다. 재학습/평가 스크립트를 실행하면 비교표가 표시됩니다.")
+        return
+
+    display_rows = [
+        {
+            key: value
+            for key, value in row.items()
+            if key != "model_key" and not key.startswith("_")
+        }
+        for row in rows
+    ]
+    st.dataframe(display_rows, use_container_width=True, hide_index=True)
+    _render_model_evaluation_chart(rows)
+
+
+def _model_evaluation_summary_rows() -> tuple[list[dict[str, object]], str]:
+    try:
+        df = load_model_evaluation_summary()
+    except Exception as exc:  # noqa: BLE001
+        return [], str(exc)
+
+    records = [
+        {
+            key: value
+            for key, value in row.items()
+        }
+        for row in df.to_dict("records")
+    ]
+    baseline_record = next(
+        (
+            record
+            for record in records
+            if str(record.get("model", "")).strip() == "baseline"
+        ),
+        None,
+    )
+    baseline_mape = _first_number(baseline_record.get("mape_pct")) if baseline_record else None
+    rows = [
+        _model_evaluation_display_row(record, baseline_mape=baseline_mape)
+        for record in records
+    ]
+    return sorted(
+        rows,
+        key=lambda row: _model_evaluation_sort_index(str(row["model_key"])),
+    ), ""
+
+
+def _model_evaluation_display_row(
+    record: dict[str, object],
+    *,
+    baseline_mape: float | None,
+) -> dict[str, object]:
+    model_key = str(record.get("model", "")).strip()
+    mape = _first_number(record.get("mape_pct"))
+    improvement = None
+    if baseline_mape is not None and baseline_mape > 0.0 and mape is not None:
+        improvement = ((baseline_mape - mape) / baseline_mape) * 100.0
+
+    line_mae_pp = _first_number(record.get("line_utilization_mae_pp"))
+    mean_risk_count = _first_number(record.get("mean_future_risk_line_count"))
+    mean_max_utilization = _first_number(record.get("mean_max_line_utilization"))
+    return {
+        "모델": _MODEL_EVALUATION_LABELS.get(model_key, model_key),
+        "MAE(MW)": _format_optional_number(record.get("mae_mw"), digits=2),
+        "RMSE(MW)": _format_optional_number(record.get("rmse_mw"), digits=2),
+        "MAPE(%)": _format_optional_number(mape, digits=2),
+        "Baseline 대비 MAPE 개선": f"{improvement:+.1f}%" if improvement is not None else "-",
+        "선로 이용률 MAE(pp)": _format_optional_number(line_mae_pp, digits=2),
+        "평균 미래 위험 선로": _format_optional_number(mean_risk_count, digits=1),
+        "평균 최대 이용률": _format_percent(mean_max_utilization) if mean_max_utilization is not None else "",
+        "노드 평가 샘플": _format_optional_integer(record.get("sample_count")),
+        "선로 평가 샘플": _format_optional_integer(record.get("line_sample_count")),
+        "평가 방식": str(record.get("evaluation_kind", "")),
+        "model_key": model_key,
+        "_mape_value": mape,
+        "_line_mae_pp_value": line_mae_pp,
+    }
+
+
+def _render_model_evaluation_chart(rows: list[dict[str, object]]) -> None:
+    chart_rows = [
+        row
+        for row in rows
+        if _first_number(row.get("_mape_value")) is not None
+    ]
+    if not chart_rows:
+        return
+
+    fig = go.Figure()
+    labels = [str(row["모델"]) for row in chart_rows]
+    model_keys = [str(row["model_key"]) for row in chart_rows]
+    fig.add_trace(
+        go.Bar(
+            name="노드 부하 MAPE(%)",
+            x=labels,
+            y=[float(row["_mape_value"]) for row in chart_rows],
+            marker_color=[
+                _MODEL_EVALUATION_COLORS.get(model_key, "#64748b")
+                for model_key in model_keys
+            ],
+            text=[f"{float(row['_mape_value']):.2f}%" for row in chart_rows],
+            textposition="outside",
+        )
+    )
+    line_rows = [
+        row
+        for row in chart_rows
+        if _first_number(row.get("_line_mae_pp_value")) is not None
+    ]
+    if line_rows:
+        fig.add_trace(
+            go.Bar(
+                name="선로 이용률 MAE(pp)",
+                x=[str(row["모델"]) for row in line_rows],
+                y=[float(row["_line_mae_pp_value"]) for row in line_rows],
+                marker_color="#f59e0b",
+                text=[f"{float(row['_line_mae_pp_value']):.2f} pp" for row in line_rows],
+                textposition="outside",
+            )
+        )
+    fig.update_layout(
+        barmode="group",
+        height=340,
+        margin={"l": 12, "r": 24, "t": 28, "b": 44},
+        yaxis={"title": "오차", "rangemode": "tozero"},
+        legend={"orientation": "h", "y": 1.12},
+    )
+    st.plotly_chart(fig, width="stretch")
+
+
+def _model_evaluation_sort_index(model_key: str) -> int:
+    try:
+        return _MODEL_EVALUATION_ORDER.index(model_key)
+    except ValueError:
+        return len(_MODEL_EVALUATION_ORDER)
 
 
 def _render_line_utilization_panel(
@@ -1572,6 +1782,16 @@ def _format_optional_kv(value: object) -> str:
 def _format_optional_km(value: object) -> str:
     number = _first_number(value)
     return f"{number:.2f} km" if number is not None else ""
+
+
+def _format_optional_number(value: object, *, digits: int = 2) -> str:
+    number = _first_number(value)
+    return f"{number:.{digits}f}" if number is not None else ""
+
+
+def _format_optional_integer(value: object) -> str:
+    number = _first_number(value)
+    return f"{int(round(number)):,}" if number is not None else ""
 
 
 def _format_optional_percent(value: object) -> str:
@@ -2361,6 +2581,7 @@ def _get_landing_monitoring_result(
     installations = _landing_installations()
     created_at = scenario.created_at or datetime.now().replace(minute=0, second=0, microsecond=0)
     cache_key = (
+        _PREDICTION_DATA_VERSION,
         scenario.scenario_id,
         created_at.isoformat(),
         round(load_scale, 4),
@@ -2409,6 +2630,7 @@ def _get_landing_prediction_result(
     installations = _landing_installations()
     created_at = scenario.created_at or datetime.now().replace(minute=0, second=0, microsecond=0)
     cache_key = (
+        _PREDICTION_DATA_VERSION,
         scenario.scenario_id,
         created_at.isoformat(),
         round(load_scale, 4),

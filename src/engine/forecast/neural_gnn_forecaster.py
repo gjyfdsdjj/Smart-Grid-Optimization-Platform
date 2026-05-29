@@ -177,6 +177,8 @@ class NeuralGNNForecaster:
         self.model_path = self.model_dir / "model.pt"
         self.history_path = self.model_dir / "training_history.csv"
         self.metadata_path = self.model_dir / "metadata.json"
+        self.evaluation_path = self.model_dir / "evaluation_summary.json"
+        self.node_error_path = self.model_dir / "node_error_summary.csv"
         self.lookback_h = lookback_h
         self.horizon_h = horizon_h
         self.hidden_dim = hidden_dim
@@ -350,6 +352,8 @@ class NeuralGNNForecaster:
             "test_mape": metrics["mape"],
             "model_path": _portable_path(self.model_path),
             "training_history_path": _portable_path(self.history_path),
+            "evaluation_summary_path": _portable_path(self.evaluation_path),
+            "node_error_summary_path": _portable_path(self.node_error_path),
         }
         self.metadata_path.write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2),
@@ -453,10 +457,11 @@ class NeuralGNNForecaster:
 
     def training_metadata(self) -> dict[str, object]:
         if hasattr(self, "_metadata"):
-            return dict(self._metadata)
+            return self._with_evaluation_metadata(dict(self._metadata))
         if self.metadata_path.exists():
-            return json.loads(self.metadata_path.read_text(encoding="utf-8"))
-        return {}
+            metadata = json.loads(self.metadata_path.read_text(encoding="utf-8"))
+            return self._with_evaluation_metadata(metadata)
+        return self._with_evaluation_metadata({})
 
     def training_history(self) -> list[dict[str, float | int]]:
         if hasattr(self, "_training_history"):
@@ -501,3 +506,21 @@ class NeuralGNNForecaster:
         self._model = net
         self._metadata = self.training_metadata()
         self._training_history = self.training_history()
+
+    def _with_evaluation_metadata(self, metadata: dict[str, object]) -> dict[str, object]:
+        if not self.evaluation_path.exists():
+            return metadata
+
+        evaluation = json.loads(self.evaluation_path.read_text(encoding="utf-8"))
+        metadata.update(
+            {
+                "evaluation_summary_path": _portable_path(self.evaluation_path),
+                "test_mae": evaluation.get("mae_mw"),
+                "test_rmse": evaluation.get("rmse_mw"),
+                "test_mape": evaluation.get("mape_pct"),
+                "evaluation_summary": evaluation,
+            }
+        )
+        if self.node_error_path.exists():
+            metadata["node_error_summary_path"] = _portable_path(self.node_error_path)
+        return metadata
