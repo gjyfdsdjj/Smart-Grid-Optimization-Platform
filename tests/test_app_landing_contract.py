@@ -5,7 +5,13 @@ from math import atan2, cos, radians, sin, sqrt
 from pathlib import Path
 
 import app
-from src.data.schemas import InstallationPoint, MapOverlayPoint, MapOverlayResult, ScenarioContext
+from src.data.schemas import (
+    InstallationPoint,
+    MapOverlayPoint,
+    MapOverlayResult,
+    MapOverlayRoute,
+    ScenarioContext,
+)
 
 
 class _FakeSessionState(dict):
@@ -271,10 +277,42 @@ def test_landing_points_use_grid_overlay_and_filter_legacy_service_points(monkey
     assert "substation:OLD_NODE" not in overlay_ids
 
 
+def test_landing_routes_hide_recommendations_until_explicit_simulation():
+    scenario = ScenarioContext(
+        scenario_id="landing-route-test",
+        created_at=datetime(2026, 5, 29, 15, 0),
+    )
+    default_recommendation = MapOverlayRoute(
+        overlay_id="simulation-route:default",
+        label="1순위 기본 추천 경로",
+        route_id="default",
+        candidate_id="TOWER_GUMI",
+        rank=1,
+    )
+    active_simulation = MapOverlayRoute(
+        overlay_id="simulation-route:active",
+        label="활성 최적 경로",
+        route_id="active",
+        candidate_id="TOWER_NAJU",
+        rank=1,
+        metadata={"landing_visible": True, "display_status": "active_simulation"},
+    )
+    service_overlay = MapOverlayResult(
+        scenario=scenario,
+        created_at=scenario.created_at,
+        source="astar",
+        routes=[default_recommendation, active_simulation],
+    )
+
+    routes = app._build_landing_routes(service_overlay)
+
+    assert routes == [active_simulation]
+
+
 def test_landing_page_uses_common_map_overlay_renderer():
     source = Path(app.__file__).read_text(encoding="utf-8")
 
-    assert "from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay" in source
+    assert "from src.ui.map_overlay_renderer import render_map_overlay" in source
     assert "from src.data.loaders import load_grid_dataset_or_default" in source
     assert "load_grid_dataset_or_default(" in source
     assert "MapOverlayService().build_grid_overlay(" in source
@@ -282,8 +320,11 @@ def test_landing_page_uses_common_map_overlay_renderer():
     assert "return_map_data=True" in source
     assert "MapOverlayService().build_landing_overlay(" in source
     assert "_build_landing_points(grid_overlay, service_overlay)" in source
+    assert "overlay_routes = _build_landing_routes(service_overlay)" in source
     assert "_render_selected_point(" not in source
     assert "최근 선택 지점" not in source
+    assert "landing_overlay.summary" not in source
+    assert "지도 fallback 및 좌표 메타데이터" not in source
 
 
 def test_landing_page_does_not_keep_local_folium_renderer_helpers():

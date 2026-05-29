@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import inspect
 
-from src.data.schemas import MapOverlayPoint
+from src.data.schemas import MapOverlayPoint, MapOverlayRoute
 from src.ui.map_overlay_renderer import (
     overlay_warnings_for_display,
     point_style_for_overlay_point,
     render_map_overlay,
+    route_style_for_overlay_route,
 )
 
 
@@ -60,3 +61,26 @@ def test_common_point_style_covers_landing_assets():
     assert selected["radius"] > plant["radius"]
     assert plant["color"] != tower["color"]
     assert tower["fill_color"] != selected["fill_color"]
+
+
+def test_active_landing_route_style_is_red():
+    route = MapOverlayRoute(
+        overlay_id="simulation-route:active",
+        label="활성 최적 경로",
+        route_id="active",
+        rank=1,
+        metadata={"landing_visible": True, "display_status": "active_simulation"},
+    )
+    default_ranked_route = MapOverlayRoute(
+        overlay_id="simulation-route:ranked",
+        label="1순위 추천 경로",
+        route_id="ranked",
+        rank=1,
+    )
+
+    active_style = route_style_for_overlay_route(route)
+    ranked_style = route_style_for_overlay_route(default_ranked_route)
+
+    assert active_style["color"] == "#dc2626"
+    assert active_style["weight"] > ranked_style["weight"]
+    assert ranked_style["color"] == "#2563eb"

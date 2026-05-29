@@ -74,6 +74,28 @@ def test_prediction_overlay_line_ids_match_risk_line_ids():
     assert all(point.metadata["coordinate_precision"] == "grid_node" for point in overlay.points)
 
 
+def test_prediction_overlay_keeps_selected_chart_nodes_on_map():
+    scenario = _scenario()
+    prediction = PredictionService().run_mock_prediction(
+        scenario=scenario,
+        created_at=scenario.created_at,
+        load_scale=1.0,
+    )
+    overlay = MapOverlayService().build_prediction_overlay(
+        prediction,
+        selected_node_ids=["TOWER_CHEONGJU", "TOWER_GUMI"],
+        map_capability=get_map_capability(api_key="", use_settings=False),
+    )
+
+    selected_node_ids = {
+        point.metadata.get("node_id")
+        for point in overlay.points
+        if point.metadata.get("selected_for") == "prediction_chart"
+    }
+
+    assert {"TOWER_CHEONGJU", "TOWER_GUMI"} <= selected_node_ids
+
+
 def test_prediction_overlay_uses_predicted_utilization_for_fallback_tables():
     scenario = _scenario()
     prediction = PredictionService().run_mock_prediction(

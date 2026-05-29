@@ -286,6 +286,37 @@ def test_prediction_overlay_uses_risk_line_ids_for_table_map_sync():
     assert not any(point.metadata["node_id"].startswith("BUS_") for point in overlay.points)
 
 
+def test_prediction_overlay_includes_selected_chart_nodes():
+    scenario = _scenario()
+    selected_node_ids = ["TOWER_CHEONGJU", "TOWER_GUMI"]
+    prediction = PredictionService().run_mock_prediction(
+        scenario=scenario,
+        created_at=scenario.created_at,
+        load_scale=1.0,
+    )
+
+    overlay = MapOverlayService().build_prediction_overlay(
+        prediction,
+        selected_node_ids=selected_node_ids,
+        map_capability=_map_2_5d_capability(),
+    )
+
+    selected_points = [
+        point
+        for point in overlay.points
+        if point.metadata.get("selected_for") == "prediction_chart"
+    ]
+    selected_point_ids = {
+        point.metadata["node_id"]
+        for point in selected_points
+    }
+
+    assert selected_point_ids == set(selected_node_ids)
+    assert all(point.status == "selected" for point in selected_points)
+    assert all(point.metadata["coordinate_precision"] == "grid_node" for point in selected_points)
+    assert "선택 노드 2개" in overlay.summary
+
+
 def test_overlay_fallback_messages_do_not_expose_vworld_key():
     secret_key = "secret-vworld-key"
     scenario = _scenario()

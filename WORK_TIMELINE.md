@@ -1163,3 +1163,118 @@
   - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 127개 통과, 14개 deselected
   - `git diff --check`는 실행했으나 현재 dirty worktree 전반의 기존 CRLF/trailing whitespace 변경 때문에 실패했다. 이번 작업 범위 밖의 전역 line-ending 정리는 하지 않았다.
 - 다음 작업: synthetic enhanced CSV를 실제 공개/기관 출처 데이터로 교체할 후보 소스를 정리하고, Grid node/line 기준 LSTM/GNN 재학습 데이터셋을 별도 slow/integration 경로로 준비한다.
+
+### 2026-05-29 Neural GNN beta 학습 경로 추가
+- 작업: 기존 경량 `GNNForecaster`를 유지한 채 PyTorch 기반 `NeuralGNNForecaster` beta를 추가했다. `GridLine` edge로 정규화 adjacency matrix를 만들고, 최근 24시간 노드별 부하/시간 feature를 입력으로 다음 시간 부하를 학습하는 최소 graph convolution 경로를 구현했다. 예측 시에는 1-step 모델을 24시간 autoregressive 방식으로 반복해 기존 `HourlyLoadPrediction` 계약을 그대로 반환한다.
+- 수정 파일: `src/engine/forecast/neural_gnn_forecaster.py`, `src/engine/forecast/evaluation.py`, `src/services/prediction_service.py`, `src/data/schemas.py`, `pages/03_prediction.py`, `tests/test_neural_gnn_forecaster.py`, `tests/test_service_integration_contract.py`, `models/gnn/README.md`, `models/gnn/model.pt`, `models/gnn/training_history.csv`, `models/gnn/metadata.json`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `PredictionService.run_neural_gnn_prediction()`이 새 public 진입점이다.
+  - 정상 경로는 `source="neural_gnn"`이며 metadata에 `model_type="neural_gnn"`, `deep_learning=True`, `framework="torch"`, `graph_edge_source="GridLine"`을 남긴다.
+  - Neural GNN 실패 시 기존 graph-aware `run_gnn_prediction()`으로 내려가고, fallback은 `mode="graph_model"`로 기록한다.
+  - Prediction 페이지의 모델 선택에 `Neural GNN(beta)`를 추가했고, 학습 결과 expander에서 `train_loss`, `val_loss`, `test_mae`, `test_rmse`, epoch 수와 모델 파일 경로를 보여준다.
+  - Neural GNN 테스트는 PyTorch import와 학습 시간이 있어 `slow` marker로 분리했다.
+  - 기본 enhanced Grid/KPX raw 기준으로 5 epoch 학습한 산출물을 `models/gnn/`에 저장했다.
+- 학습 결과:
+  - 직접 확인: `source=neural_gnn`, `predictions=576`, `risk_lines=4`, fallback 없음
+  - `epochs_trained=5`, `val_loss_best=0.028804`, `test_mae=5.695MW`, `test_rmse=8.817MW`
+  - `training_history.csv`: train loss `0.1292 -> 0.0236`, val loss best `0.0288`
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_neural_gnn_forecaster.py -q` -> 2개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/engine/forecast/neural_gnn_forecaster.py src/engine/forecast/evaluation.py src/services/prediction_service.py pages/03_prediction.py tests/test_neural_gnn_forecaster.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_prediction_service_contract.py tests/test_prediction_risk_and_fallback.py tests/test_prediction_page_contract.py tests/test_service_integration_contract.py -q` -> 17개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 127개 통과, 16개 deselected
+- 다음 작업: 최종 산출물을 `app.py` 단일 랜딩 화면으로 합칠 때 Prediction 패널에 `Neural GNN(beta)` 학습 그래프와 metrics를 포함하고, LSTM GridNode 재학습 결과와 나란히 비교한다.
+
+### 2026-05-29 LSTM+Neural GNN beta 병렬 조합 추가
+- 작업: 기존 `LSTM+GNN`은 `LSTM + 기존 graph-aware GNN` 조합으로 유지하고, PyTorch 학습형 GNN을 쓰는 `LSTM+Neural GNN(beta)` 옵션을 별도로 추가했다. 이로써 발표에서 기존 hybrid와 neural GNN hybrid를 구분해 설명할 수 있게 했다.
+- 수정 파일: `src/services/prediction_service.py`, `src/data/schemas.py`, `pages/03_prediction.py`, `tests/test_prediction_risk_and_fallback.py`, `tests/test_service_integration_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `PredictionService.run_hybrid_neural_gnn_prediction()`이 새 public 진입점이다.
+  - 정상 경로는 `source="hybrid_neural_gnn"`이며 `LSTM 65% + Neural GNN 35%` 가중 평균으로 24시간 예측을 만든다.
+  - metadata에는 `model_type="lstm_neural_gnn_hybrid"`, `framework="tensorflow+torch"`, `hybrid_primary="lstm"`, `hybrid_secondary="neural_gnn"`를 남긴다.
+  - Neural GNN 학습 이력은 `training_history`로 유지해 Prediction 페이지의 `Neural GNN 학습 결과` expander에서 기존 Neural GNN 단독 경로와 같은 방식으로 확인할 수 있다.
+  - `LSTM+GNN`은 기존 graph-aware GNN 조합으로 그대로 남겼고, 새 UI 옵션은 `LSTM+Neural GNN(beta)`로 추가했다.
+  - 두 branch 중 하나가 실패하면 `baseline_model` fallback으로 전환해 데모 중단을 막는다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_prediction_risk_and_fallback.py tests/test_prediction_service_contract.py tests/test_service_integration_contract.py -q` -> 14개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 128개 통과, 16개 deselected
+  - 직접 확인: `run_hybrid_neural_gnn_prediction(raw_dir="data/raw", epochs=5, retrain=False)` -> `source="hybrid_neural_gnn"`, `predictions=576`, `risk_lines=4`, fallback 없음, `framework="tensorflow+torch"`
+- 다음 작업: `app.py` 단일 산출물 통합 시 Prediction 패널의 모델 선택에 `LSTM+Neural GNN(beta)`를 포함하고, 발표에서는 `LSTM+GNN`과 `LSTM+Neural GNN(beta)`를 구분해 설명한다.
+
+### 2026-05-29 TensorFlow GPU 전용 venv 구성
+- 작업: 기존 앱/테스트용 `.venv`는 유지하고, LSTM/TensorFlow GPU 학습 전용 `.venv-tf`를 별도로 구성했다. `.venv-tf`에는 `tensorflow[and-cuda]==2.21.0`, `pandas`, `scikit-learn`을 설치했으며, TensorFlow가 wheel 내부 CUDA 12 라이브러리를 찾을 수 있도록 wrapper 스크립트를 추가했다.
+- 수정 파일: `.gitignore`, `scripts/tf_gpu_python.sh`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `.venv-*/`를 git ignore에 추가해 `.venv-tf/`가 워크트리에 잡히지 않게 했다.
+  - `scripts/tf_gpu_python.sh`는 `.venv-tf/bin/python`을 실행하기 전에 `.venv-tf` 내부 `nvidia/*/lib` 경로와 `/usr/lib/wsl/lib`를 `LD_LIBRARY_PATH`에 추가한다.
+  - 앱/일반 테스트는 기존처럼 `.venv/bin/python`을 사용하고, TensorFlow GPU 학습만 `scripts/tf_gpu_python.sh`로 실행한다.
+- 검증:
+  - 일반 WSL `Ubuntu-22.04`에서 `/usr/lib/wsl/lib/nvidia-smi` -> RTX 4070 SUPER 인식
+  - `wsl.exe -d Ubuntu-22.04 --cd /mnt/c/Users/smp05/Desktop/SGOP -e scripts/tf_gpu_python.sh -c "import tensorflow as tf; ..."` -> `PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU')` 확인, 512x512 `tf.matmul` 통과
+  - 기존 `.venv` 확인: `torch 2.12.0+cu130`, `torch.cuda.is_available() == True`, device `NVIDIA GeForce RTX 4070 SUPER`
+- 다음 작업: LSTM 재학습을 실행할 때는 `scripts/tf_gpu_python.sh`로 학습 진입점을 호출하고, 학습된 `models/lstm/model.keras`, `models/lstm/scalers.pkl`를 기존 앱 `.venv`에서 로드 호환되는지 확인한다.
+
+### 2026-05-29 운영 지도 랜딩 전체 화면화
+- 작업: `app.py` 랜딩의 운영 지도가 첫 화면 대부분을 차지하도록 레이아웃을 조정했다. 큰 제목/metric 블록을 압축 헤더로 바꾸고, Streamlit 본문 padding을 줄였으며, Folium component iframe을 viewport 높이 기준으로 확장했다.
+- 수정 파일: `app.py`, `src/ui/map_overlay_renderer.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 앱 진입 시 sidebar는 기본 collapsed 상태로 열려 지도 폭을 우선 확보한다.
+  - `SGOP 운영 지도` 헤더는 한 줄 상태바 형태로 압축하고, 시나리오/지도 모드/추가 지점/좌표계/환경 정보를 함께 표시한다.
+  - 랜딩 지도는 `height=860`, `width=None`으로 호출하고, `render_map_overlay()`는 `width=None`일 때 `st_folium(use_container_width=True)`를 사용한다.
+  - CSS에서 Folium iframe 높이를 `calc(100vh - 5.4rem)`로 맞춰 브라우저 첫 화면에서 지도가 주 시각 요소가 되도록 했다.
+  - 좌표 클릭, `elevation_source="not_queried"`, `EPSG:4326`, 설치 지점 저장 계약은 바꾸지 않았다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py -q` -> 13개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 128개 통과, 16개 deselected
+  - `.venv/bin/streamlit run app.py --server.port 8502 --server.address 127.0.0.1 --server.headless true` -> 서버 기동
+  - `curl -I http://127.0.0.1:8502` -> HTTP 200 확인
+- 다음 작업: 브라우저에서 `app.py` 첫 화면의 지도 높이/폭과 sidebar collapsed 상태가 발표 화면에 맞는지 수동 확인한다.
+
+### 2026-05-29 랜딩 지도 하단 보조 설명 제거
+- 작업: 사용자 요청에 따라 `app.py` 운영 지도 아래에 표시되던 overlay summary, 지도 모드/좌표계/고도 caption, `지도 fallback 및 좌표 메타데이터` expander를 제거했다. 지도 렌더링, 지도 클릭, 설치 지점 저장, fallback metadata 계약 자체는 유지했다.
+- 수정 파일: `app.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 첫 화면은 운영 지도와 설치 목록 중심으로 유지된다.
+  - `Landing overlay: 운영 지점 ...`, `지도 모드: map_2_5d | 좌표계: EPSG:4326 | 고도: not_queried` 문구가 더 이상 본문에 표시되지 않는다.
+  - fallback/warnings는 내부 `MapOverlayResult` 계약에는 남지만 랜딩 본문 UI에는 노출하지 않는다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py tests/test_app_landing_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py -q` -> 10개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 128개 통과, 16개 deselected
+- 다음 작업: 브라우저에서 8501 실행 화면을 확인해 지도 아래 문구가 사라졌는지 수동 확인한다.
+
+### 2026-05-29 랜딩 추천 경로 초기 표시 비활성화
+- 작업: `app.py` 랜딩 지도에서 기본 Simulation 추천 경로 24개를 초기 표시하지 않도록 분리했다. 기존 GridLine 송전망은 그대로 표시하고, 향후 app 안에서 특정 지점 간 최적 경로 시뮬레이션을 명시적으로 실행할 때만 route를 지도에 올릴 수 있게 표시 조건을 추가했다.
+- 수정 파일: `app.py`, `src/ui/map_overlay_renderer.py`, `tests/test_app_landing_contract.py`, `tests/test_map_overlay_renderer_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `service_overlay.routes`는 그대로 생성될 수 있지만, 랜딩 표시 단계의 `_build_landing_routes()`가 `landing_visible=True` 또는 `display_status in {"active_simulation", "optimal_route", "selected"}`인 route만 통과시킨다.
+  - 현재 기본 랜딩에서는 추천 경로가 0개로 필터링되어 기존 송전망 선만 남는다.
+  - 추후 app 단일 화면 시뮬레이션에서 활성 최적 경로 route에 위 metadata를 부여하면 `route_style_for_overlay_route()`가 빨간색 선으로 렌더링한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py -q` -> 15개 통과
+  - 직접 확인: 기본 Simulation overlay `service_routes=24`, 랜딩 표시 route `landing_routes=0`
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 130개 통과, 16개 deselected
+  - `git diff --check -- app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: app 단일 산출물 통합 시 사용자가 시작/종료 지점과 후보를 선택해 최적화 송전경로를 실행하는 UI를 붙이고, 그 결과 route만 `landing_visible=True`로 지도에 표시한다.
+
+### 2026-05-29 Prediction 지도 선택 노드 표시 동기화
+- 작업: Prediction 페이지의 `그래프에 표시할 노드` 선택값이 예측 지도에도 반영되도록 `MapOverlayService.build_prediction_overlay()`에 `selected_node_ids` 입력을 추가했다. 기존 위험 선로 overlay는 유지하고, 선택 노드는 `status="selected"`, `selected_for="prediction_chart"` metadata를 가진 지도 점으로 함께 표시한다.
+- 수정 파일: `src/services/map_overlay_service.py`, `pages/03_prediction.py`, `tests/test_map_overlay_contract.py`, `tests/test_prediction_page_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 지도는 계속 `PredictionResult.risk_lines`를 위험 선로로 표시한다.
+  - 그래프에서 선택한 서울/수원/대구/대전/청주/구미 같은 GridNode도 별도 선택 점으로 지도에 표시된다.
+  - 위험 선로 endpoint와 선택 노드가 겹치면 선택 상태가 우선 적용된다.
+  - `pages/03_prediction.py`는 `selected_bus_ids`를 `build_prediction_overlay(..., selected_node_ids=selected_bus_ids)`로 전달한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall pages/03_prediction.py src/services/map_overlay_service.py tests/test_map_overlay_contract.py tests/test_prediction_page_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_map_overlay_contract.py tests/test_prediction_page_contract.py -q` -> 15개 통과
+  - 직접 확인: Baseline 결과에서 위험 선로 4개, 선택 노드 `TOWER_SEOUL/TOWER_SUWON/TOWER_DAEGU/TOWER_DAEJEON/TOWER_CHEONGJU/TOWER_GUMI` 전달 시 지도 point 8개, 선택 point 6개 표시
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 132개 통과, 16개 deselected
+  - `git diff --check -- pages/03_prediction.py src/services/map_overlay_service.py tests/test_map_overlay_contract.py tests/test_prediction_page_contract.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: app 단일 화면 통합 시 Prediction 패널도 같은 `selected_node_ids` 계약을 사용해 선택 노드와 위험 선로를 하나의 지도 layer로 합친다.

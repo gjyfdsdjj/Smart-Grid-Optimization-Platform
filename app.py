@@ -15,11 +15,12 @@ from src.data.schemas import (
     InstallationTargetKind,
     MapOverlayPoint,
     MapOverlayResult,
+    MapOverlayRoute,
     ScenarioContext,
 )
 from src.services.map_overlay_service import MapOverlayService
 from src.services.geo_place_service import GeoPlaceService
-from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay
+from src.ui.map_overlay_renderer import render_map_overlay
 from src.ui.scenario_controls import render_scenario_sidebar
 
 
@@ -53,6 +54,7 @@ _LANDING_AUTO_NAME_STATE_KEY = "sgop_landing_auto_install_name"
 _LANDING_AUTO_KIND_STATE_KEY = "sgop_landing_auto_install_kind"
 _LANDING_PENDING_NAME_STATE_KEY = "sgop_landing_pending_install_name"
 _LANDING_PENDING_KIND_STATE_KEY = "sgop_landing_pending_install_kind"
+_LANDING_MAP_HEIGHT_PX = 860
 
 _DEFAULT_POWER_PLANTS: tuple[dict[str, float | str], ...] = (
     {"id": "incheon", "label": "인천 발전소", "latitude": 37.4563, "longitude": 126.7052, "capacity_mw": 1800.0},
@@ -82,8 +84,9 @@ def main() -> None:
     st.set_page_config(
         page_title="SGOP",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
     )
+    _apply_landing_fullscreen_style()
     _init_landing_state()
 
     scenario = render_scenario_sidebar()
@@ -112,27 +115,13 @@ def main() -> None:
         else:
             st.sidebar.warning("지도에서 설치 지점을 먼저 선택하세요.")
 
-    st.title("SGOP 운영 지도")
-    st.caption(
-        f"시나리오: {scenario.scenario_id}  |  "
-        f"지도 모드: {map_capability.rendering_mode}  |  "
-        f"실행 환경: {settings.sgop_env}"
-    )
-
-    if map_capability.fallback.enabled:
-        st.caption(f"Fallback: `{map_capability.fallback.mode}`")
-
-    summary_cols = st.columns(4)
-    summary_cols[0].metric("추가 지점", f"{len(st.session_state.sgop_landing_installations)}개")
-    summary_cols[1].metric("기본 발전소", f"{len(_DEFAULT_POWER_PLANTS)}개")
-    summary_cols[2].metric("기본 송전탑", f"{len(_DEFAULT_TRANSMISSION_TOWERS)}개")
-    summary_cols[3].metric("좌표계", "EPSG:4326")
+    _render_landing_map_header(scenario, map_capability)
 
     grid_overlay, grid_warning = _get_grid_overlay(scenario, map_capability)
     service_overlay, overlay_warning = _get_service_overlay(scenario, map_capability)
     overlay_points = _build_landing_points(grid_overlay, service_overlay)
     overlay_lines = grid_overlay.lines if grid_overlay is not None else []
-    overlay_routes = service_overlay.routes if service_overlay is not None else []
+    overlay_routes = _build_landing_routes(service_overlay)
     landing_overlay = MapOverlayService().build_landing_overlay(
         scenario=scenario,
         created_at=scenario.created_at or datetime.now().replace(minute=0, second=0, microsecond=0),
@@ -150,7 +139,8 @@ def main() -> None:
     map_data = render_map_overlay(
         landing_overlay,
         map_capability=map_capability,
-        height=650,
+        height=_LANDING_MAP_HEIGHT_PX,
+        width=None,
         show_point_table=True,
         return_map_data=True,
     )
@@ -159,24 +149,96 @@ def main() -> None:
         if _store_last_clicked_point(clicked_point, selected_kind):
             st.rerun()
 
-    st.caption(landing_overlay.summary)
-    st.caption(
-        f"지도 모드: {landing_overlay.metadata.get('rendering_mode')}  |  "
-        f"좌표계: {landing_overlay.metadata.get('coordinate_system')}  |  "
-        f"고도: {landing_overlay.metadata.get('elevation_source')}"
-    )
-    overlay_extra_warnings = overlay_warnings_for_display([], landing_overlay.warnings)
-    if overlay_extra_warnings:
-        with st.expander("지도 fallback 및 좌표 메타데이터", expanded=False):
-            if landing_overlay.fallback.enabled:
-                st.caption(
-                    f"Fallback: `{landing_overlay.fallback.mode}`  |  "
-                    f"{landing_overlay.fallback.reason}"
-                )
-            for warning in overlay_extra_warnings:
-                st.caption(f"- {warning}")
-
     _render_installation_table()
+
+
+def _apply_landing_fullscreen_style() -> None:
+    st.markdown(
+        """
+        <style>
+            div[data-testid="stAppViewContainer"] .main .block-container {
+                max-width: 100%;
+                padding: 0.45rem 0.65rem 0.6rem;
+            }
+            .sgop-landing-header {
+                align-items: center;
+                border-bottom: 1px solid rgba(15, 23, 42, 0.12);
+                display: flex;
+                gap: 0.8rem;
+                justify-content: space-between;
+                min-height: 2.6rem;
+                padding: 0.15rem 0.1rem 0.45rem;
+            }
+            .sgop-landing-title {
+                color: #0f172a;
+                font-size: 1.18rem;
+                font-weight: 700;
+                line-height: 1.15;
+                white-space: nowrap;
+            }
+            .sgop-landing-status {
+                color: #475569;
+                display: flex;
+                flex-wrap: wrap;
+                font-size: 0.82rem;
+                gap: 0.75rem;
+                justify-content: flex-end;
+            }
+            div[data-testid="stIFrame"] {
+                height: calc(100vh - 5.4rem) !important;
+                min-height: 720px;
+            }
+            div[data-testid="stIFrame"] iframe {
+                height: calc(100vh - 5.4rem) !important;
+                min-height: 720px;
+                width: 100% !important;
+            }
+            @media (max-width: 760px) {
+                .sgop-landing-header {
+                    align-items: flex-start;
+                    flex-direction: column;
+                    gap: 0.25rem;
+                }
+                .sgop-landing-status {
+                    justify-content: flex-start;
+                }
+                div[data-testid="stIFrame"],
+                div[data-testid="stIFrame"] iframe {
+                    height: calc(100vh - 7.2rem) !important;
+                    min-height: 560px;
+                }
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_landing_map_header(
+    scenario: ScenarioContext,
+    map_capability: MapCapability,
+) -> None:
+    fallback_label = (
+        f"<span>fallback {map_capability.fallback.mode}</span>"
+        if map_capability.fallback.enabled
+        else ""
+    )
+    st.markdown(
+        f"""
+        <div class="sgop-landing-header">
+            <div class="sgop-landing-title">SGOP 운영 지도</div>
+            <div class="sgop-landing-status">
+                <span>시나리오 {scenario.scenario_id}</span>
+                <span>지도 {map_capability.rendering_mode}</span>
+                <span>추가 지점 {len(st.session_state.sgop_landing_installations)}개</span>
+                <span>좌표계 EPSG:4326</span>
+                <span>{settings.sgop_env}</span>
+                {fallback_label}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _init_landing_state() -> None:
@@ -498,6 +560,22 @@ def _build_landing_points(
             not in grid_node_ids
         )
     return _dedupe_points(points)
+
+
+def _build_landing_routes(
+    service_overlay: MapOverlayResult | None,
+) -> list[MapOverlayRoute]:
+    """Keep app landing quiet until an explicit route simulation is requested."""
+    if service_overlay is None:
+        return []
+
+    visible_statuses = {"active_simulation", "optimal_route", "selected"}
+    return [
+        route
+        for route in service_overlay.routes
+        if route.metadata.get("landing_visible") is True
+        or str(route.metadata.get("display_status", "")) in visible_statuses
+    ]
 
 
 def _build_mock_grid_points() -> list[MapOverlayPoint]:

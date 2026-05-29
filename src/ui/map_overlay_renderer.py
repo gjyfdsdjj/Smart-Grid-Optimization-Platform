@@ -32,7 +32,7 @@ def render_map_overlay(
     map_capability: MapCapability,
     selected_line_id: str | None = None,
     height: int = 620,
-    width: int = 1200,
+    width: int | None = 1200,
     show_point_table: bool = False,
     return_map_data: bool = False,
 ) -> dict[str, Any] | None:
@@ -71,6 +71,7 @@ def render_map_overlay(
         folium_map,
         width=width,
         height=height,
+        use_container_width=width is None,
         returned_objects=returned_objects,
     )
     if return_map_data:
@@ -204,6 +205,24 @@ def line_style_for_status(status: str, *, selected: bool = False) -> dict[str, A
     }
 
 
+def route_style_for_overlay_route(route: MapOverlayRoute) -> dict[str, Any]:
+    """Style active app simulation routes distinctly from ranked recommendations."""
+    display_status = str(route.metadata.get("display_status", ""))
+    if route.metadata.get("landing_visible") is True or display_status in {
+        "active_simulation",
+        "optimal_route",
+        "selected",
+    }:
+        return {"color": "#dc2626", "weight": 6, "opacity": 0.95, "dash_array": None}
+
+    return {
+        "color": "#2563eb" if route.rank == 1 else "#64748b",
+        "weight": 5 if route.rank == 1 else 3,
+        "opacity": 0.9 if route.rank == 1 else 0.45,
+        "dash_array": "10" if route.rank == 1 else None,
+    }
+
+
 def _load_map_libraries() -> tuple[Any | None, Any | None, str | None]:
     try:
         import folium
@@ -269,14 +288,15 @@ def _add_overlay_route(folium: Any, folium_map: Any, route: MapOverlayRoute) -> 
     route_coords = [[point.latitude, point.longitude] for point in route.points]
     if len(route_coords) < 2:
         return
+    style = route_style_for_overlay_route(route)
 
     folium.PolyLine(
         locations=route_coords,
-        color="#2563eb" if route.rank == 1 else "#64748b",
-        weight=5 if route.rank == 1 else 3,
-        dash_array="10" if route.rank == 1 else None,
+        color=style["color"],
+        weight=style["weight"],
+        dash_array=style["dash_array"],
         tooltip=route.label,
-        opacity=0.9 if route.rank == 1 else 0.45,
+        opacity=style["opacity"],
     ).add_to(folium_map)
 
 

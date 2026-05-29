@@ -320,6 +320,94 @@ class PredictionService:
             },
         )
 
+    def run_neural_gnn_prediction(
+        self,
+        raw_dir: str,
+        load_scale: float = 1.0,
+        forecast_start: datetime | None = None,
+        scenario: ScenarioContext | None = None,
+        retrain: bool = False,
+        epochs: int = 20,
+        grid_dataset: GridDataset | None = None,
+        grid_dir: str | None = str(DEFAULT_GRID_CSV_DIR),
+        user_installations: Iterable[InstallationPoint] | None = None,
+        model_dir: str | None = None,
+    ) -> PredictionResult:
+        """PyTorch 기반 Neural GNN(beta) 예측 결과를 반환한다."""
+        dataset = self._resolve_grid_dataset(
+            grid_dataset=grid_dataset,
+            grid_dir=grid_dir,
+            user_installations=user_installations,
+            created_at=forecast_start,
+        )
+        load_df = self._load_grid_history(raw_dir, dataset)
+        now = self._resolve_forecast_start(load_df, forecast_start)
+        resolved_scenario = self._resolve_scenario(scenario, now)
+        history_df = self._apply_load_scale(load_df, load_scale)
+        target_features = self._build_target_features(
+            load_df=history_df,
+            forecast_start=now,
+        )
+
+        try:
+            predictions, neural_metadata = self._predict_neural_gnn(
+                training_df=load_df,
+                history_df=history_df,
+                forecast_start=now,
+                target_features=target_features,
+                grid_dataset=dataset,
+                retrain=retrain,
+                epochs=epochs,
+                model_dir=model_dir,
+            )
+        except Exception as exc:  # noqa: BLE001
+            fallback_result = self.run_gnn_prediction(
+                raw_dir=raw_dir,
+                load_scale=load_scale,
+                forecast_start=now,
+                scenario=resolved_scenario,
+                grid_dataset=dataset,
+                grid_dir=grid_dir,
+                user_installations=user_installations,
+            )
+            fallback_result.summary = (
+                "Neural GNN 예측 실패로 기존 graph-aware GNN 결과를 사용합니다. "
+                f"{fallback_result.summary}"
+            )
+            fallback_result.warnings = [
+                build_fallback_warning("PredictionService", "graph_model"),
+                f"Neural GNN 실패: {_summarize_prediction_error(exc)}",
+                *fallback_result.warnings,
+            ]
+            fallback_result.fallback = build_fallback_info(
+                mode="graph_model",
+                reason="학습형 Neural GNN 경로가 실패해 기존 graph-aware GNN 예측으로 전환했습니다.",
+                primary_path="src.engine.forecast.neural_gnn_forecaster",
+                active_path="src.engine.forecast.gnn_forecaster",
+            )
+            fallback_result.metadata["neural_gnn_fallback_error"] = _summarize_prediction_error(exc)
+            fallback_result.metadata["neural_gnn_beta_requested"] = True
+            return fallback_result
+
+        return self._build_prediction_result(
+            scenario=resolved_scenario,
+            created_at=now,
+            load_scale=load_scale,
+            predictions=predictions,
+            source="neural_gnn",
+            warnings=[],
+            grid_dataset=dataset,
+            metadata={
+                "history_source": "KPX CSV redistributed to GridNode",
+                "graph_edge_source": "GridLine",
+                "legacy_bus_source": False,
+                "model_type": "neural_gnn",
+                "deep_learning": True,
+                "framework": "torch",
+                **neural_metadata,
+            },
+        )
+
     def run_hybrid_prediction(
         self,
         raw_dir: str,
@@ -427,6 +515,135 @@ class PredictionService:
             primary_path="src.engine.forecast.lstm_forecaster + src.engine.forecast.gnn_forecaster",
             active_path="src.services.prediction_service.PredictionService.run_baseline_prediction",
         )
+        return baseline_result
+
+    def run_hybrid_neural_gnn_prediction(
+        self,
+        raw_dir: str,
+        load_scale: float = 1.0,
+        forecast_start: datetime | None = None,
+        scenario: ScenarioContext | None = None,
+        retrain: bool = False,
+        epochs: int = 20,
+        grid_dataset: GridDataset | None = None,
+        grid_dir: str | None = str(DEFAULT_GRID_CSV_DIR),
+        user_installations: Iterable[InstallationPoint] | None = None,
+        model_dir: str | None = None,
+    ) -> PredictionResult:
+        """LSTM + Neural GNN(beta) 병렬 조합 예측을 반환한다."""
+        dataset = self._resolve_grid_dataset(
+            grid_dataset=grid_dataset,
+            grid_dir=grid_dir,
+            user_installations=user_installations,
+            created_at=forecast_start,
+        )
+        load_df = self._load_grid_history(raw_dir, dataset)
+        now = self._resolve_forecast_start(load_df, forecast_start)
+        resolved_scenario = self._resolve_scenario(scenario, now)
+        history_df = self._apply_load_scale(load_df, load_scale)
+        target_features = self._build_target_features(
+            load_df=history_df,
+            forecast_start=now,
+        )
+
+        lstm_predictions: list[HourlyLoadPrediction] | None = None
+        neural_predictions: list[HourlyLoadPrediction] | None = None
+        neural_metadata: dict[str, object] = {}
+        lstm_warnings: list[str] = []
+        branch_errors: list[str] = []
+
+        try:
+            lstm_predictions, lstm_warnings = self._predict_lstm(
+                training_df=load_df,
+                history_df=history_df,
+                forecast_start=now,
+                target_features=target_features,
+                retrain=retrain,
+                epochs=epochs,
+            )
+        except Exception as exc:  # noqa: BLE001
+            branch_errors.append(f"LSTM 실패: {_summarize_prediction_error(exc)}")
+
+        try:
+            neural_predictions, neural_metadata = self._predict_neural_gnn(
+                training_df=load_df,
+                history_df=history_df,
+                forecast_start=now,
+                target_features=target_features,
+                grid_dataset=dataset,
+                retrain=retrain,
+                epochs=epochs,
+                model_dir=model_dir,
+            )
+        except Exception as exc:  # noqa: BLE001
+            branch_errors.append(f"Neural GNN 실패: {_summarize_prediction_error(exc)}")
+
+        if lstm_predictions is not None and neural_predictions is not None:
+            predictions = _combine_prediction_lists(
+                primary=lstm_predictions,
+                secondary=neural_predictions,
+                primary_weight=0.65,
+                secondary_weight=0.35,
+            )
+            warnings = [
+                build_source_warning("PredictionService", "hybrid_neural_gnn"),
+                "LSTM 65% + Neural GNN 35% 가중 평균으로 병렬 조합 예측을 사용합니다.",
+            ]
+            warnings.extend(f"LSTM: {warning}" for warning in lstm_warnings)
+
+            return self._build_prediction_result(
+                scenario=resolved_scenario,
+                created_at=now,
+                load_scale=load_scale,
+                predictions=predictions,
+                source="hybrid_neural_gnn",
+                warnings=warnings,
+                grid_dataset=dataset,
+                metadata={
+                    "history_source": "KPX CSV redistributed to GridNode",
+                    "graph_edge_source": "GridLine",
+                    "legacy_bus_source": False,
+                    "model_type": "lstm_neural_gnn_hybrid",
+                    "deep_learning": True,
+                    "framework": "tensorflow+torch",
+                    "hybrid_primary": "lstm",
+                    "hybrid_secondary": "neural_gnn",
+                    "hybrid_primary_weight": 0.65,
+                    "hybrid_secondary_weight": 0.35,
+                    "training_history": neural_metadata.get("training_history", []),
+                    **{
+                        f"neural_gnn_{key}": value
+                        for key, value in neural_metadata.items()
+                        if key != "training_history"
+                    },
+                },
+            )
+
+        baseline_result = self.run_baseline_prediction(
+            raw_dir=raw_dir,
+            load_scale=load_scale,
+            forecast_start=now,
+            scenario=resolved_scenario,
+            grid_dataset=dataset,
+            grid_dir=grid_dir,
+            user_installations=user_installations,
+        )
+        baseline_result.summary = (
+            "LSTM+Neural GNN 병렬 예측 실패로 baseline 결과를 사용합니다. "
+            f"{baseline_result.summary}"
+        )
+        baseline_result.warnings = [
+            build_fallback_warning("PredictionService", "baseline_model"),
+            *branch_errors,
+            *baseline_result.warnings,
+        ]
+        baseline_result.fallback = build_fallback_info(
+            mode="baseline_model",
+            reason="LSTM+Neural GNN 병렬 예측 중 하나 이상이 실패해 baseline 예측으로 전환했습니다.",
+            primary_path="src.engine.forecast.lstm_forecaster + src.engine.forecast.neural_gnn_forecaster",
+            active_path="src.services.prediction_service.PredictionService.run_baseline_prediction",
+        )
+        baseline_result.metadata["hybrid_neural_gnn_requested"] = True
         return baseline_result
 
     # ── 내부 ──────────────────────────────────────────────────────────────────
@@ -932,6 +1149,38 @@ class PredictionService:
                 target_features=target_features,
             )
         )
+
+    def _predict_neural_gnn(
+        self,
+        *,
+        training_df: pd.DataFrame,
+        history_df: pd.DataFrame,
+        forecast_start: datetime,
+        target_features: list,
+        grid_dataset: GridDataset,
+        retrain: bool,
+        epochs: int,
+        model_dir: str | None = None,
+    ) -> tuple[list[HourlyLoadPrediction], dict[str, object]]:
+        from src.engine.forecast.neural_gnn_forecaster import NeuralGNNForecaster
+
+        graph_edges = self._grid_graph_edges(grid_dataset)
+        forecaster = NeuralGNNForecaster(model_dir=model_dir)
+        forecaster.fit_or_load(
+            training_df,
+            graph_edges=graph_edges,
+            retrain=retrain,
+            epochs=epochs,
+        )
+        predictions = forecaster.predict(
+            history_df=history_df,
+            forecast_start=forecast_start,
+            graph_edges=graph_edges,
+            target_features=target_features,
+        )
+        metadata = forecaster.training_metadata()
+        metadata["training_history"] = forecaster.training_history()
+        return predictions, metadata
 
 
 # ── 순수 함수 ──────────────────────────────────────────────────────────────────

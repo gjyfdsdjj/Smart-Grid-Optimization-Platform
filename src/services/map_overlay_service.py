@@ -272,6 +272,7 @@ class MapOverlayService:
         self,
         result: PredictionResult,
         *,
+        selected_node_ids: list[str] | None = None,
         map_capability: MapCapability | None = None,
     ) -> MapOverlayResult:
         capability = _resolve_map_capability(map_capability)
@@ -284,6 +285,7 @@ class MapOverlayService:
         lines: list[MapOverlayLine] = []
         warnings: list[str] = []
         grid_points_by_node_id = _grid_points_by_node_id_from_metadata(result.metadata)
+        selected_ids = list(dict.fromkeys(selected_node_ids or []))
 
         for risk_line in result.risk_lines:
             from_point = self._simulation_bus_point(
@@ -307,6 +309,21 @@ class MapOverlayService:
             points_by_id.setdefault(to_point.overlay_id, to_point)
             lines.append(_prediction_risk_line_overlay(risk_line, from_point, to_point, result.source))
 
+        for node_id in selected_ids:
+            selected_point = self._simulation_bus_point(
+                node_id,
+                fallback_label=node_id,
+                source=result.source,
+                warnings=warnings,
+                grid_points_by_node_id=grid_points_by_node_id,
+            )
+            if selected_point is None:
+                continue
+            points_by_id[selected_point.overlay_id] = _prediction_selected_node_point(
+                selected_point,
+                node_id=node_id,
+            )
+
         return _build_overlay_result(
             scenario=scenario,
             created_at=result.created_at,
@@ -316,7 +333,8 @@ class MapOverlayService:
             routes=[],
             summary=(
                 f"Prediction overlay: 예측 위험 선로 {len(lines)}개와 "
-                f"{len(points_by_id)}개 GridNode 지점을 제공합니다."
+                f"선택 노드 {sum(1 for point in points_by_id.values() if point.metadata.get('selected_for') == 'prediction_chart')}개, "
+                f"전체 {len(points_by_id)}개 GridNode 지점을 제공합니다."
             ),
             source_warnings=result.warnings,
             local_warnings=warnings,
@@ -594,6 +612,35 @@ def _prediction_risk_line_overlay(
             "peak_risk_hour": risk_line.peak_risk_hour,
             "explanation": risk_line.explanation,
         },
+    )
+
+
+def _prediction_selected_node_point(
+    point: MapOverlayPoint,
+    *,
+    node_id: str,
+) -> MapOverlayPoint:
+    metadata = dict(point.metadata)
+    metadata.update(
+        {
+            "node_id": node_id,
+            "selected_for": "prediction_chart",
+            "selection_source": "prediction_selected_bus_ids",
+        }
+    )
+    return MapOverlayPoint(
+        overlay_id=point.overlay_id,
+        label=point.label,
+        kind=point.kind,
+        latitude=point.latitude,
+        longitude=point.longitude,
+        elevation_m=point.elevation_m,
+        coordinate_system=point.coordinate_system,
+        elevation_source=point.elevation_source,
+        status="selected",
+        risk_level=point.risk_level,
+        source=point.source,
+        metadata=metadata,
     )
 
 

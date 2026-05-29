@@ -33,7 +33,9 @@ ResultSource = Literal[
     "baseline",
     "lstm",
     "gnn",
+    "neural_gnn",
     "hybrid",
+    "hybrid_neural_gnn",
     "dc_power_flow",
     "heuristic",
     "astar",
@@ -44,6 +46,7 @@ FallbackMode = Literal[
     "none",
     "mock_data",
     "baseline_model",
+    "graph_model",
     "cached_result",
     "manual_override",
     "map_2_5d",
@@ -669,7 +672,9 @@ class PredictionResult:
     "baseline" : 이동평균 / 계절성 분해 baseline 모델
     "lstm"     : 훈련된 LSTM 모델
     "gnn"      : 그래프 기반 예측 모델
+    "neural_gnn": 학습형 PyTorch GNN 모델
     "hybrid"   : LSTM + GNN 병렬 조합 모델
+    "hybrid_neural_gnn": LSTM + Neural GNN 병렬 조합 모델
     """
 
     scenario_id: str

@@ -33,7 +33,15 @@ st.set_page_config(
 )
 
 # ── 상수 ──────────────────────────────────────────────────────────────────────
-_MODEL_OPTIONS = ["Mock", "Baseline", "LSTM", "GNN", "LSTM+GNN"]
+_MODEL_OPTIONS = [
+    "Mock",
+    "Baseline",
+    "LSTM",
+    "GNN",
+    "Neural GNN(beta)",
+    "LSTM+GNN",
+    "LSTM+Neural GNN(beta)",
+]
 _SELECTED_BUS_NAMES_KEY = "prediction_selected_bus_names"
 
 _RISK_COLOR = {
@@ -114,8 +122,28 @@ def _run_prediction_with_fallback(
                 scenario=scenario,
                 grid_dataset=grid_dataset,
             )
+        if model_source == "Neural GNN(beta)":
+            return svc.run_neural_gnn_prediction(
+                raw_dir=raw_dir,
+                load_scale=load_scale,
+                forecast_start=None,
+                scenario=scenario,
+                retrain=retrain,
+                epochs=epochs,
+                grid_dataset=grid_dataset,
+            )
         if model_source == "LSTM+GNN":
             return svc.run_hybrid_prediction(
+                raw_dir=raw_dir,
+                load_scale=load_scale,
+                forecast_start=None,
+                scenario=scenario,
+                retrain=retrain,
+                epochs=epochs,
+                grid_dataset=grid_dataset,
+            )
+        if model_source == "LSTM+Neural GNN(beta)":
+            return svc.run_hybrid_neural_gnn_prediction(
                 raw_dir=raw_dir,
                 load_scale=load_scale,
                 forecast_start=None,
@@ -176,6 +204,80 @@ def _resolve_selected_line_id(selection_event: object, rows: list[dict]) -> str 
     if isinstance(selected_line_id, str) and selected_line_id.strip():
         return selected_line_id.strip()
     return None
+
+
+def _render_neural_gnn_training_artifacts(result: PredictionResult) -> None:
+    if result.metadata.get("model_type") not in {"neural_gnn", "lstm_neural_gnn_hybrid"}:
+        return
+
+    with st.expander("Neural GNN 학습 결과", expanded=False):
+        metric_cols = st.columns(4)
+        val_loss = result.metadata.get(
+            "val_loss_best",
+            result.metadata.get("neural_gnn_val_loss_best", 0.0),
+        )
+        test_mae = result.metadata.get(
+            "test_mae",
+            result.metadata.get("neural_gnn_test_mae", 0.0),
+        )
+        test_rmse = result.metadata.get(
+            "test_rmse",
+            result.metadata.get("neural_gnn_test_rmse", 0.0),
+        )
+        epochs_trained = result.metadata.get(
+            "epochs_trained",
+            result.metadata.get("neural_gnn_epochs_trained", "-"),
+        )
+        metric_cols[0].metric(
+            "Best val loss",
+            f"{float(val_loss):.4f}",
+        )
+        metric_cols[1].metric(
+            "Test MAE",
+            f"{float(test_mae):.1f} MW",
+        )
+        metric_cols[2].metric(
+            "Test RMSE",
+            f"{float(test_rmse):.1f} MW",
+        )
+        metric_cols[3].metric(
+            "Epochs",
+            str(epochs_trained),
+        )
+
+        history = result.metadata.get("training_history")
+        if isinstance(history, list) and history:
+            history_df = pd.DataFrame(history)
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(
+                    x=history_df["epoch"],
+                    y=history_df["train_loss"],
+                    mode="lines+markers",
+                    name="train_loss",
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=history_df["epoch"],
+                    y=history_df["val_loss"],
+                    mode="lines+markers",
+                    name="val_loss",
+                )
+            )
+            fig.update_layout(
+                xaxis_title="Epoch",
+                yaxis_title="MSE loss",
+                height=280,
+                margin={"t": 20, "b": 40},
+                legend={"orientation": "h", "y": -0.25},
+            )
+            st.plotly_chart(fig, width="stretch")
+
+        st.caption(
+            f"모델: `{result.metadata.get('model_path', result.metadata.get('neural_gnn_model_path', ''))}`  |  "
+            f"학습 이력: `{result.metadata.get('training_history_path', result.metadata.get('neural_gnn_training_history_path', ''))}`"
+        )
 
 
 _RAW_DIR = str(
@@ -260,15 +362,17 @@ with st.sidebar:
             "Baseline: KPX 실데이터 시간대 평균 (빠름)\n"
             "LSTM: KPX 실데이터 신경망 예측 (학습 필요)\n"
             "GNN: 인접 노드 그래프 기반 예측\n"
-            "LSTM+GNN: 두 모델 병렬 조합, 실패 시 baseline 전환"
+            "Neural GNN(beta): GridLine adjacency 기반 PyTorch GNN\n"
+            "LSTM+GNN: LSTM + 기존 graph-aware GNN 조합\n"
+            "LSTM+Neural GNN(beta): LSTM + PyTorch Neural GNN 조합"
         ),
         key=PREDICTION_MODEL_SOURCE_KEY,
     )
 
-    if model_source in {"LSTM", "LSTM+GNN"}:
+    if model_source in {"LSTM", "LSTM+GNN", "Neural GNN(beta)", "LSTM+Neural GNN(beta)"}:
         retrain = st.checkbox(
             "모델 재학습 (slow)",
-            help="체크 시 저장된 모델을 무시하고 재학습합니다. 기본 제품 흐름에서는 꺼두는 것을 권장합니다.",
+            help="체크 시 저장된 모델을 무시하고 재학습합니다. 저장 모델이 없으면 최초 1회는 자동 학습합니다.",
             key=PREDICTION_RETRAIN_KEY,
         )
         epochs = (
@@ -375,8 +479,36 @@ if run_btn or cached_result is None or source_changed:
                 grid_dataset=page_grid_dataset,
             )
 
+    elif model_source == "Neural GNN(beta)":
+        spinner_msg = "Neural GNN 학습/추론 중... (최초 실행은 시간이 걸릴 수 있습니다)"
+        with st.spinner(spinner_msg):
+            st.session_state.pred_result = _run_prediction_with_fallback(
+                svc,
+                model_source=model_source,
+                raw_dir=_RAW_DIR,
+                load_scale=load_scale,
+                scenario=shared_scenario,
+                grid_dataset=page_grid_dataset,
+                retrain=retrain,
+                epochs=epochs,
+            )
+
     elif model_source == "LSTM+GNN":
         spinner_msg = "LSTM+GNN 병렬 예측 중... (수 분 소요될 수 있습니다)"
+        with st.spinner(spinner_msg):
+            st.session_state.pred_result = _run_prediction_with_fallback(
+                svc,
+                model_source=model_source,
+                raw_dir=_RAW_DIR,
+                load_scale=load_scale,
+                scenario=shared_scenario,
+                grid_dataset=page_grid_dataset,
+                retrain=retrain,
+                epochs=epochs,
+            )
+
+    elif model_source == "LSTM+Neural GNN(beta)":
+        spinner_msg = "LSTM+Neural GNN 병렬 예측 중... (수 분 소요될 수 있습니다)"
         with st.spinner(spinner_msg):
             st.session_state.pred_result = _run_prediction_with_fallback(
                 svc,
@@ -410,6 +542,7 @@ if result.scenario is not None:
 map_capability = get_map_capability(prefer_webgl=False)
 prediction_overlay = MapOverlayService().build_prediction_overlay(
     result,
+    selected_node_ids=selected_bus_ids,
     map_capability=map_capability,
 )
 st.session_state.pred_map_capability = map_capability
@@ -455,6 +588,7 @@ peak_ts = result.created_at.replace(hour=peak_h) + (
 col_s4.metric("예측 피크", f"{peak_ts:%H:%M}")
 
 st.info(result.summary)
+_render_neural_gnn_training_artifacts(result)
 
 st.divider()
 

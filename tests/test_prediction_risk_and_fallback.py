@@ -115,6 +115,72 @@ def test_hybrid_prediction_falls_back_to_baseline_when_branch_fails(
     assert "baseline 예측으로 전환" in result.fallback.reason
 
 
+def test_hybrid_neural_gnn_prediction_combines_lstm_and_neural_branch(
+    monkeypatch,
+    load_df_13bus,
+    prediction_factory,
+    scenario,
+):
+    service = PredictionService()
+    forecast_start = load_df_13bus["timestamp"].max()
+
+    def fake_lstm(**kwargs):
+        return [
+            prediction_factory(
+                timestamp=feature.timestamp,
+                bus_id=feature.bus_id,
+                value=100.0,
+            )
+            for feature in kwargs["target_features"]
+        ], []
+
+    def fake_neural_gnn(**kwargs):
+        return [
+            prediction_factory(
+                timestamp=feature.timestamp,
+                bus_id=feature.bus_id,
+                value=200.0,
+            )
+            for feature in kwargs["target_features"]
+        ], {
+            "model_type": "neural_gnn",
+            "framework": "torch",
+            "deep_learning": True,
+            "epochs_trained": 2,
+            "val_loss_best": 0.1,
+            "test_mae": 12.0,
+            "test_rmse": 18.0,
+            "training_history": [
+                {"epoch": 1, "train_loss": 0.2, "val_loss": 0.15},
+                {"epoch": 2, "train_loss": 0.12, "val_loss": 0.1},
+            ],
+        }
+
+    monkeypatch.setattr(service, "_load_grid_history", lambda raw_dir, dataset: load_df_13bus)
+    monkeypatch.setattr(service, "_predict_lstm", fake_lstm)
+    monkeypatch.setattr(service, "_predict_neural_gnn", fake_neural_gnn)
+
+    result = service.run_hybrid_neural_gnn_prediction(
+        raw_dir="unused",
+        load_scale=1.0,
+        forecast_start=forecast_start,
+        scenario=scenario,
+        retrain=False,
+        epochs=2,
+    )
+
+    assert result.source == "hybrid_neural_gnn"
+    assert result.fallback.enabled is False
+    assert result.predictions
+    assert result.predictions[0].predicted_load_mw == 135.0
+    assert result.metadata["model_type"] == "lstm_neural_gnn_hybrid"
+    assert result.metadata["framework"] == "tensorflow+torch"
+    assert result.metadata["hybrid_secondary"] == "neural_gnn"
+    assert result.metadata["neural_gnn_epochs_trained"] == 2
+    assert isinstance(result.metadata["training_history"], list)
+    assert result.warnings[0] == "PredictionService는 현재 `hybrid_neural_gnn` 결과를 반환합니다."
+
+
 def test_risk_lines_are_sorted_non_low_and_explained(scenario):
     service = PredictionService()
 
