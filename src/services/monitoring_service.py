@@ -469,10 +469,10 @@ class MonitoringService:
                 f"입력 부하 배율 {resolved_scale:.2f}×가 권장 하한 0.50×보다 낮아 0.50×로 보정했습니다."
             )
             resolved_scale = 0.5
-        elif resolved_scale > 1.5:
+        elif resolved_scale > 2.0:
             warnings.append(
-                f"입력 부하 배율 {resolved_scale:.2f}×가 권장 상한 1.50×보다 높아 1.50×로 보정했습니다."
+                f"입력 부하 배율 {resolved_scale:.2f}×가 권장 상한 2.00×보다 높아 2.00×로 보정했습니다."
             )
-            resolved_scale = 1.5
+            resolved_scale = 2.0
 
         return round(resolved_scale, 2), warnings

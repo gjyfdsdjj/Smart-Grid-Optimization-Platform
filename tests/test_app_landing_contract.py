@@ -9,6 +9,7 @@ import app
 from src.data.schemas import (
     CongestionSummary,
     GridDataset,
+    GridImprovementProposal,
     GridLine,
     GridNode,
     InstallationPoint,
@@ -20,8 +21,14 @@ from src.data.schemas import (
     MapOverlayRoute,
     MonitoringResult,
     NodeStressSnapshot,
+    PredictionResult,
+    RerouteCandidate,
+    RiskLine,
+    RoutePoint,
+    RouteResult,
     ScenarioContext,
     StressAnalysisResult,
+    SuggestedGridNode,
     TransmissionScenario,
 )
 
@@ -409,14 +416,17 @@ def test_landing_global_load_scale_state_defaults_and_clamps(monkeypatch):
     assert fake_state[app.TRANSMISSION_REQUESTED_TRANSFER_MW_STATE_KEY] == app.DEFAULT_TRANSFER_MW
     assert fake_state[app.TRANSMISSION_NEXT_INDEX_STATE_KEY] == 1
     assert fake_state[app.TRANSMISSION_CREATE_REQUESTED_STATE_KEY] is False
+    assert fake_state[app.PREDICTION_ENABLED_STATE_KEY] is False
+    assert fake_state[app.PREDICTION_MODEL_STATE_KEY] == "Baseline"
+    assert fake_state[app.PREDICTION_RESULT_STATE_KEY] is None
 
     fake_state[app.GLOBAL_LOAD_SCALE_STATE_KEY] = 9.0
 
-    assert app._get_global_load_scale() == 1.5
+    assert app._get_global_load_scale() == 2.0
     assert fake_state[app.GLOBAL_LOAD_SCALE_STATE_KEY] == 9.0
 
-    assert app._normalize_global_load_scale_state() == 1.5
-    assert fake_state[app.GLOBAL_LOAD_SCALE_STATE_KEY] == 1.5
+    assert app._normalize_global_load_scale_state() == 2.0
+    assert fake_state[app.GLOBAL_LOAD_SCALE_STATE_KEY] == 2.0
 
     fake_state[app.GLOBAL_LOAD_SCALE_STATE_KEY] = "invalid"
 
@@ -963,6 +973,152 @@ def test_landing_stress_metadata_attaches_without_changing_line_status():
     assert enriched[0].metadata["stress_capacity_margin_mw"] == 110.0
     assert enriched[0].metadata["is_bottleneck"] is False
     assert enriched[0].metadata["contributing_scenario_ids"] == ["TX_001"]
+    assert enriched[0].metadata["xai_reason_summary"]
+    assert enriched[0].metadata["xai_before_metrics"]["utilization"] == 0.78
+    assert any(
+        "송전 시나리오" in cause
+        for cause in enriched[0].metadata["xai_bottleneck_causes"]
+    )
+
+
+def test_landing_improvement_metadata_attaches_to_target_line():
+    from_point = MapOverlayPoint(
+        overlay_id="node:A",
+        label="A",
+        kind="transmission_tower",
+        latitude=36.0,
+        longitude=127.0,
+    )
+    to_point = MapOverlayPoint(
+        overlay_id="node:B",
+        label="B",
+        kind="transmission_tower",
+        latitude=36.1,
+        longitude=127.1,
+    )
+    line = MapOverlayLine(
+        overlay_id="grid-line:LINE_AB",
+        label="A-B",
+        kind="line",
+        from_point=from_point,
+        to_point=to_point,
+        metadata={"line_id": "LINE_AB"},
+    )
+    candidate = RerouteCandidate(
+        candidate_id="REROUTE_TX_001",
+        target_line_id="LINE_AB",
+        scenario_route_id="TX_001",
+        scenario_label="A -> B 송전",
+        before_target_utilization=0.94,
+        after_target_utilization=0.61,
+        added_distance_km=12.5,
+        score=42.0,
+        rationale="목표 선로 이용률이 낮아집니다.",
+    )
+    suggested_node = SuggestedGridNode(
+        suggested_node_id="SUGGESTED_TOWER_LINE_AB",
+        label="A-B 우회 송전탑 후보",
+        latitude=36.05,
+        longitude=127.08,
+        voltage_kv=345.0,
+        capacity_mw=650.0,
+        install_cost_billion=9.2,
+        target_line_id="LINE_AB",
+        reason="우회점을 추가합니다.",
+    )
+    proposal = GridImprovementProposal(
+        proposal_id="IMPROVE_LINE_AB",
+        target_line_id="LINE_AB",
+        summary="LINE_AB 개선안입니다.",
+        reroute_candidates=[candidate],
+        suggested_nodes=[suggested_node],
+    )
+
+    enriched = app._attach_improvement_metadata([line], proposal)
+
+    assert enriched[0].metadata["improvement_proposal_id"] == "IMPROVE_LINE_AB"
+    assert enriched[0].metadata["improvement_best_candidate_id"] == "REROUTE_TX_001"
+    assert enriched[0].metadata["improvement_best_after_utilization"] == 0.61
+    assert enriched[0].metadata["improvement_suggested_node_label"] == "A-B 우회 송전탑 후보"
+
+
+def test_landing_suggested_node_becomes_session_installation_point():
+    suggested_node = SuggestedGridNode(
+        suggested_node_id="SUGGESTED_TOWER_LINE_AB",
+        label="A-B 우회 송전탑 후보",
+        latitude=36.05,
+        longitude=127.08,
+        voltage_kv=345.0,
+        capacity_mw=650.0,
+        install_cost_billion=9.2,
+        target_line_id="LINE_AB",
+        relief_line_ids=["LINE_AB"],
+        expected_utilization_delta=-0.22,
+        reason="우회점을 추가합니다.",
+        metadata={"expected_after_utilization": 0.72},
+    )
+
+    installation = app._suggested_node_to_installation_point(suggested_node)
+
+    assert installation.kind == "transmission_tower"
+    assert installation.mode == "review"
+    assert installation.label == "A-B 우회 송전탑 후보"
+    assert installation.voltage_kv == 345.0
+    assert installation.metadata["suggested_node_id"] == "SUGGESTED_TOWER_LINE_AB"
+    assert installation.metadata["recommended_capacity_mw"] == 650.0
+    assert installation.metadata["relief_line_ids"] == ["LINE_AB"]
+
+
+def test_landing_builds_improvement_routes_and_suggested_points():
+    route = RouteResult(
+        route_id="reroute-tx-001",
+        start_bus_id="A",
+        end_bus_id="C",
+        path_node_ids=["A", "B", "C"],
+        waypoints=[
+            RoutePoint("A", "A", 36.0, 127.0),
+            RoutePoint("B", "B", 36.1, 127.1),
+            RoutePoint("C", "C", 36.2, 127.2),
+        ],
+        total_distance_km=30.0,
+        estimated_cost=12.0,
+        source="astar",
+    )
+    candidate = RerouteCandidate(
+        candidate_id="REROUTE_TX_001",
+        target_line_id="LINE_AB",
+        scenario_route_id="TX_001",
+        route=route,
+        after_target_utilization=0.62,
+        score=32.0,
+    )
+    suggested_node = SuggestedGridNode(
+        suggested_node_id="SUGGESTED_TOWER_LINE_AB",
+        label="A-B 우회 송전탑 후보",
+        latitude=36.05,
+        longitude=127.08,
+        voltage_kv=345.0,
+        capacity_mw=650.0,
+        install_cost_billion=9.2,
+        target_line_id="LINE_AB",
+        reason="우회점을 추가합니다.",
+    )
+    proposal = GridImprovementProposal(
+        proposal_id="IMPROVE_LINE_AB",
+        target_line_id="LINE_AB",
+        reroute_candidates=[candidate],
+        suggested_nodes=[suggested_node],
+    )
+
+    routes = app._build_improvement_reroute_routes(proposal)
+    points = app._build_improvement_suggested_points(proposal)
+
+    assert len(routes) == 1
+    assert routes[0].metadata["display_status"] == "improvement_candidate"
+    assert routes[0].points[1].metadata["selection_role"] == "improvement_reroute"
+    assert len(points) == 1
+    assert points[0].kind == "tower_candidate"
+    assert points[0].metadata["suggested_node_id"] == "SUGGESTED_TOWER_LINE_AB"
 
 
 def test_landing_node_stress_metadata_attaches_to_grid_nodes():
@@ -1173,6 +1329,305 @@ def test_landing_stress_analysis_receives_monitoring_result(monkeypatch) -> None
     assert captured["monitoring_result"] is monitoring_result
 
 
+def test_landing_prediction_flow_uses_predicted_utilization_delta() -> None:
+    scenario = ScenarioContext(
+        scenario_id="landing-prediction-flow-test",
+        created_at=datetime(2026, 5, 29, 16, 0),
+    )
+    prediction_result = PredictionResult(
+        scenario_id=scenario.scenario_id,
+        scenario=scenario,
+        created_at=scenario.created_at,
+        load_scale=1.0,
+        forecast_horizon_h=24,
+        predictions=[],
+        risk_lines=[
+            RiskLine(
+                line_id="LINE_AB",
+                from_bus="PLANT_A",
+                to_bus="TOWER_B",
+                from_bus_name="A 발전소",
+                to_bus_name="B 송전탑",
+                peak_risk_hour=14,
+                predicted_utilization=0.8,
+                risk_level="high",
+                explanation="테스트",
+            ),
+            RiskLine(
+                line_id="LINE_UNKNOWN",
+                from_bus="X",
+                to_bus="Y",
+                from_bus_name="X",
+                to_bus_name="Y",
+                peak_risk_hour=14,
+                predicted_utilization=1.2,
+                risk_level="critical",
+                explanation="테스트",
+            ),
+        ],
+        summary="테스트",
+        source="baseline",
+    )
+    monitoring_result = MonitoringResult(
+        scenario=scenario,
+        created_at=scenario.created_at,
+        source="dc_power_flow",
+        load_scale=1.0,
+        line_statuses=[
+            LineStatus(
+                line_id="LINE_AB",
+                from_bus="PLANT_A",
+                to_bus="TOWER_B",
+                from_bus_name="A 발전소",
+                to_bus_name="B 송전탑",
+                flow_mw=260.0,
+                capacity_mw=500.0,
+                utilization=0.52,
+                status="normal",
+                risk_level="low",
+                loss_mw=0.3,
+            )
+        ],
+        congestion_summary=CongestionSummary(
+            total_lines=1,
+            normal_count=1,
+            warning_count=0,
+            critical_count=0,
+            overload_count=0,
+            avg_utilization=0.52,
+            total_loss_mw=0.3,
+            max_utilization=0.52,
+            max_utilization_line_id="LINE_AB",
+        ),
+    )
+
+    predicted_flow = app._prediction_flow_by_line(
+        prediction_result,
+        grid_dataset=_app_grid_dataset(),
+        monitoring_result=monitoring_result,
+        load_scale=1.0,
+    )
+
+    assert predicted_flow == {"LINE_AB": 140.0}
+
+
+def test_landing_stress_analysis_receives_prediction_flow(monkeypatch) -> None:
+    fake_state = _FakeSessionState()
+    monkeypatch.setattr(app.st, "session_state", fake_state)
+    monkeypatch.setattr(
+        app,
+        "load_grid_dataset_or_default",
+        lambda **kwargs: _app_grid_dataset(),
+    )
+    scenario = ScenarioContext(
+        scenario_id="landing-prediction-stress-test",
+        created_at=datetime(2026, 5, 29, 16, 0),
+    )
+    prediction_result = PredictionResult(
+        scenario_id=scenario.scenario_id,
+        scenario=scenario,
+        created_at=scenario.created_at,
+        load_scale=1.0,
+        forecast_horizon_h=24,
+        predictions=[],
+        risk_lines=[
+            RiskLine(
+                line_id="LINE_AB",
+                from_bus="PLANT_A",
+                to_bus="TOWER_B",
+                from_bus_name="A 발전소",
+                to_bus_name="B 송전탑",
+                peak_risk_hour=14,
+                predicted_utilization=0.8,
+                risk_level="high",
+                explanation="테스트",
+            )
+        ],
+        summary="테스트",
+        source="baseline",
+        metadata={"landing_model_source": "Baseline"},
+    )
+    captured: dict[str, object] = {}
+
+    def fake_analyze_route_stress(**kwargs):
+        captured["predicted_flow_by_line"] = kwargs["predicted_flow_by_line"]
+        return StressAnalysisResult(
+            scenario=scenario,
+            created_at=scenario.created_at,
+            load_scale=1.0,
+        )
+
+    monkeypatch.setattr(app, "analyze_route_stress", fake_analyze_route_stress)
+
+    result, warning = app._get_landing_stress_analysis(
+        scenario,
+        load_scale=1.0,
+        prediction_result=prediction_result,
+    )
+
+    assert result is not None
+    assert warning == ""
+    assert captured["predicted_flow_by_line"] == {"LINE_AB": 225.0}
+    assert result.metadata["prediction_source"] == "baseline"
+    assert result.metadata["prediction_model_source"] == "Baseline"
+
+
+def test_prediction_briefing_comparison_summarizes_model_delta() -> None:
+    scenario = ScenarioContext(
+        scenario_id="landing-prediction-briefing-test",
+        created_at=datetime(2026, 5, 29, 16, 0),
+    )
+    baseline_result = PredictionResult(
+        scenario_id=scenario.scenario_id,
+        scenario=scenario,
+        created_at=scenario.created_at,
+        load_scale=2.0,
+        forecast_horizon_h=24,
+        predictions=[],
+        risk_lines=[
+            RiskLine(
+                line_id="LINE_AB",
+                from_bus="PLANT_A",
+                to_bus="TOWER_B",
+                from_bus_name="A 발전소",
+                to_bus_name="B 송전탑",
+                peak_risk_hour=14,
+                predicted_utilization=0.9,
+                risk_level="critical",
+                explanation="테스트",
+            ),
+            RiskLine(
+                line_id="LINE_BC",
+                from_bus="TOWER_B",
+                to_bus="TOWER_C",
+                from_bus_name="B 송전탑",
+                to_bus_name="C 송전탑",
+                peak_risk_hour=14,
+                predicted_utilization=0.7,
+                risk_level="medium",
+                explanation="테스트",
+            ),
+        ],
+        summary="baseline",
+        source="baseline",
+        metadata={"landing_model_source": "Baseline"},
+    )
+    selected_result = PredictionResult(
+        scenario_id=scenario.scenario_id,
+        scenario=scenario,
+        created_at=scenario.created_at,
+        load_scale=2.0,
+        forecast_horizon_h=24,
+        predictions=[],
+        risk_lines=[
+            RiskLine(
+                line_id="LINE_AB",
+                from_bus="PLANT_A",
+                to_bus="TOWER_B",
+                from_bus_name="A 발전소",
+                to_bus_name="B 송전탑",
+                peak_risk_hour=14,
+                predicted_utilization=0.8,
+                risk_level="high",
+                explanation="테스트",
+            )
+        ],
+        summary="hybrid",
+        source="hybrid_neural_gnn",
+        metadata={"landing_model_source": "LSTM+Neural GNN(beta)"},
+    )
+    baseline_stress = StressAnalysisResult(
+        scenario=scenario,
+        created_at=scenario.created_at,
+        load_scale=2.0,
+        line_stresses=[
+            LineStressSnapshot(
+                line_id="LINE_AB",
+                from_node_id="PLANT_A",
+                to_node_id="TOWER_B",
+                from_node_name="A 발전소",
+                to_node_name="B 송전탑",
+                capacity_mw=500.0,
+                base_flow_mw=300.0,
+                predicted_flow_mw=150.0,
+                total_flow_mw=450.0,
+                utilization=0.9,
+                status="critical",
+                risk_level="critical",
+            ),
+            LineStressSnapshot(
+                line_id="LINE_BC",
+                from_node_id="TOWER_B",
+                to_node_id="TOWER_C",
+                from_node_name="B 송전탑",
+                to_node_name="C 송전탑",
+                capacity_mw=500.0,
+                base_flow_mw=300.0,
+                predicted_flow_mw=50.0,
+                total_flow_mw=350.0,
+                utilization=0.7,
+                status="warning",
+                risk_level="medium",
+            ),
+        ],
+        bottleneck_line_ids=["LINE_AB"],
+        critical_line_ids=["LINE_AB"],
+    )
+    selected_stress = StressAnalysisResult(
+        scenario=scenario,
+        created_at=scenario.created_at,
+        load_scale=2.0,
+        line_stresses=[
+            LineStressSnapshot(
+                line_id="LINE_AB",
+                from_node_id="PLANT_A",
+                to_node_id="TOWER_B",
+                from_node_name="A 발전소",
+                to_node_name="B 송전탑",
+                capacity_mw=500.0,
+                base_flow_mw=300.0,
+                predicted_flow_mw=100.0,
+                total_flow_mw=400.0,
+                utilization=0.8,
+                status="warning",
+                risk_level="high",
+            ),
+            LineStressSnapshot(
+                line_id="LINE_BC",
+                from_node_id="TOWER_B",
+                to_node_id="TOWER_C",
+                from_node_name="B 송전탑",
+                to_node_name="C 송전탑",
+                capacity_mw=500.0,
+                base_flow_mw=300.0,
+                predicted_flow_mw=0.0,
+                total_flow_mw=300.0,
+                utilization=0.6,
+                status="normal",
+                risk_level="low",
+            ),
+        ],
+    )
+
+    comparison = app._build_prediction_briefing_comparison(
+        baseline_result=baseline_result,
+        selected_result=selected_result,
+        baseline_stress=baseline_stress,
+        selected_stress=selected_stress,
+        selected_model_label="LSTM+Neural GNN(beta)",
+    )
+
+    risk_summary = next(row for row in comparison.summary_rows if row["항목"] == "미래 위험 선로")
+    max_summary = next(row for row in comparison.summary_rows if row["항목"] == "최대 이용률")
+    line_ab = next(row for row in comparison.line_delta_rows if row["선로 ID"] == "LINE_AB")
+
+    assert risk_summary["변화"] == "-1개"
+    assert max_summary["변화"] == "-10.0 pp"
+    assert line_ab["구간"] == "A 발전소->B 송전탑"
+    assert line_ab["변화 pp"] == -10.0
+    assert line_ab["예측 MW 변화"] == "-50.0 MW"
+
+
 def test_landing_node_detail_uses_node_stress() -> None:
     point = MapOverlayPoint(
         overlay_id="grid-node:TOWER_A",
@@ -1301,6 +1756,8 @@ def test_landing_stress_table_rows_sort_and_filter() -> None:
         status_filter="병목만",
     )
     risk_rows = app._risk_line_table_rows(stress_analysis)
+    warning_chart_rows = app._line_utilization_chart_rows(warning_rows)
+    bottleneck_chart_rows = app._line_utilization_chart_rows(bottleneck_rows)
     metrics = app._stress_summary_metrics(stress_analysis)
 
     assert [row["선로 ID"] for row in rows] == [
@@ -1319,20 +1776,162 @@ def test_landing_stress_table_rows_sort_and_filter() -> None:
         "LINE_WARN",
         "LINE_SHARED",
     }
+    assert [row["선로 ID"] for row in warning_chart_rows] == ["LINE_WARN"]
+    assert warning_chart_rows[0]["표시명"] == "B->C"
+    assert warning_chart_rows[0]["이용률 % 값"] == 74.0
+    assert warning_chart_rows[0]["막대 색상"] == app._STRESS_STATUS_BAR_COLORS["warning"]
+    assert {row["선로 ID"] for row in bottleneck_chart_rows} == {
+        "LINE_HIGH",
+        "LINE_SHARED",
+    }
     assert metrics["병목 선로"] == 2
     assert metrics["위험/과부하"] == 1
     assert metrics["최대 이용률 선로"] == "LINE_HIGH"
     assert metrics["최대 이용률"] == "96.0%"
 
 
+def test_line_utilization_display_label_prefers_korean_endpoint_names() -> None:
+    row = {
+        "선로 ID": "GLINE_TOWER_DANGJIN_TOWER_PYEONGTAEK",
+        "From": "당진 송전탑",
+        "To": "평택 송전탑",
+    }
+
+    assert app._line_utilization_display_label(row) == "당진 송전탑->평택 송전탑"
+
+
+def test_operation_console_status_items_expose_demo_flow(monkeypatch):
+    fake_state = _FakeSessionState(
+        {
+            app.SELECTED_GRID_OBJECT_STATE_KEY: {
+                "type": "line",
+                "id": "LINE_HIGH",
+                "label": "High line",
+            }
+        }
+    )
+    monkeypatch.setattr(app.st, "session_state", fake_state)
+    scenario = ScenarioContext(
+        scenario_id="status-bar-test",
+        created_at=datetime(2026, 5, 29, 18, 0),
+    )
+    stress_analysis = StressAnalysisResult(
+        scenario=scenario,
+        created_at=scenario.created_at,
+        load_scale=1.0,
+        line_stresses=[
+            LineStressSnapshot(
+                line_id="LINE_HIGH",
+                from_node_id="A",
+                to_node_id="B",
+                capacity_mw=500.0,
+                total_flow_mw=480.0,
+                utilization=0.96,
+                status="critical",
+            )
+        ],
+        bottleneck_line_ids=["LINE_HIGH"],
+        critical_line_ids=["LINE_HIGH"],
+    )
+    proposal = GridImprovementProposal(
+        proposal_id="IMPROVE_LINE_HIGH",
+        target_line_id="LINE_HIGH",
+        reroute_candidates=[
+            RerouteCandidate(
+                candidate_id="REROUTE_TX_001",
+                target_line_id="LINE_HIGH",
+                scenario_route_id="TX_001",
+            )
+        ],
+    )
+
+    items = dict(
+        app._operation_status_items(
+            interaction_mode="transmission",
+            stress_analysis=stress_analysis,
+            prediction_result=None,
+            improvement_proposal=proposal,
+        )
+    )
+
+    assert items["작업 모드"] == "송전 시나리오"
+    assert items["병목 선로"] == "1"
+    assert items["위험/과부하"] == "1"
+    assert items["선택 선로"] == "LINE_HIGH"
+    assert items["Prediction"] == "미반영"
+    assert items["개선안"] == "1개 우회"
+
+
+def test_map_layer_legend_documents_operation_layers():
+    labels = [label for label, _, _ in app._map_layer_legend_items()]
+
+    assert labels == [
+        "선로 <50%",
+        "선로 50-70%",
+        "선로 70-85%",
+        "선로 85-100%",
+        "선로 100-125%",
+        "선로 125%+",
+        "활성 송전 시나리오",
+        "선택 선로",
+        "우회 경로 후보",
+        "신규 송전탑 후보",
+    ]
+
+
+def test_transmission_scenario_table_rows_are_console_ready():
+    route = RouteResult(
+        route_id="tx-route-001",
+        start_bus_id="A",
+        end_bus_id="B",
+        path_node_ids=["A", "B"],
+        source="astar",
+    )
+    scenario = TransmissionScenario(
+        scenario_route_id="TX_001",
+        label="A -> B 300MW 송전",
+        start_node_id="A",
+        end_node_id="B",
+        start_node_name="A 발전소",
+        end_node_name="B 송전탑",
+        requested_transfer_mw=300.0,
+        route=route,
+        path_node_ids=["A", "B"],
+        used_line_ids=["LINE_AB"],
+        status="active",
+        source="astar",
+        created_at=datetime(2026, 5, 29, 18, 0),
+        metadata={"scenario_order": 3},
+    )
+
+    rows = app._transmission_scenario_table_rows([scenario])
+
+    assert rows == [
+        {
+            "순번": 3,
+            "상태": "active",
+            "시나리오": "A -> B 300MW 송전",
+            "시작": "A 발전소",
+            "종료": "B 송전탑",
+            "송전량 MW": 300.0,
+            "경로 노드 수": 2,
+            "사용 선로 수": 1,
+            "경로 source": "astar",
+            "생성 시각": "2026-05-29T18:00:00",
+        }
+    ]
+
+
 def test_landing_page_uses_common_map_overlay_renderer():
     source = Path(app.__file__).read_text(encoding="utf-8")
 
     assert "from src.ui.map_overlay_renderer import render_map_overlay" in source
-    assert "from src.engine.stress.route_stress_analyzer import analyze_route_stress" in source
+    assert "analyze_route_stress" in source
+    assert "PredictionService" in source
     assert "from src.data.loaders import load_grid_dataset_or_default" in source
     assert "load_grid_dataset_or_default(" in source
     assert "GLOBAL_LOAD_SCALE_STATE_KEY" in source
+    assert "PREDICTION_RESULT_STATE_KEY" in source
     assert "LANDING_INTERACTION_MODE_STATE_KEY" in source
     assert "TRANSMISSION_SELECTION_STEP_STATE_KEY" in source
     assert "STRESS_ANALYSIS_STATE_KEY" in source
@@ -1343,10 +1942,21 @@ def test_landing_page_uses_common_map_overlay_renderer():
     assert "_build_landing_points(grid_overlay, service_overlay)" in source
     assert "_build_landing_routes(service_overlay)" in source
     assert "_build_transmission_scenario_routes(_landing_transmission_scenarios())" in source
+    assert "_render_selected_grid_object_dialog(" not in source
+    assert "@st.dialog(" not in source
+    assert "_render_selected_grid_object_detail(" not in source
     assert "_render_selected_point(" not in source
     assert "최근 선택 지점" not in source
     assert "landing_overlay.summary" not in source
     assert "지도 fallback 및 좌표 메타데이터" not in source
+
+
+def test_legacy_multipage_sidebar_navigation_is_hidden():
+    config_path = Path(app.__file__).resolve().parent / ".streamlit" / "config.toml"
+    config_source = config_path.read_text(encoding="utf-8")
+
+    assert "[client]" in config_source
+    assert "showSidebarNavigation = false" in config_source
 
 
 def test_landing_page_does_not_keep_local_folium_renderer_helpers():

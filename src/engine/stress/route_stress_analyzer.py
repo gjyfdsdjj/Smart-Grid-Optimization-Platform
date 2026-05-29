@@ -43,6 +43,7 @@ def analyze_route_stress(
     load_scale: float = 1.0,
     created_at: datetime | None = None,
     monitoring_result: MonitoringResult | None = None,
+    predicted_flow_by_line: dict[str, float] | None = None,
 ) -> StressAnalysisResult:
     """active 송전 시나리오를 선로별 누적 이용률로 변환한다."""
 
@@ -60,7 +61,28 @@ def analyze_route_stress(
         load_scale=load_scale,
         monitoring_result=monitoring_result,
     )
+    raw_predicted_flow_by_line = _normalize_predicted_flow_by_line(
+        predicted_flow_by_line
+    )
+    active_line_ids = {
+        line.line_id
+        for line in grid_dataset.lines
+        if line.status != "out_of_service"
+    }
+    resolved_predicted_flow_by_line = {
+        line_id: flow_mw
+        for line_id, flow_mw in raw_predicted_flow_by_line.items()
+        if line_id in active_line_ids
+    }
+    ignored_predicted_line_ids = sorted(
+        set(raw_predicted_flow_by_line) - set(resolved_predicted_flow_by_line)
+    )
     warnings.extend(base_flow_warnings)
+    if ignored_predicted_line_ids:
+        warnings.append(
+            "RouteStressAnalyzer는 GridDataset의 active 선로가 아닌 예측 선로 "
+            f"{', '.join(ignored_predicted_line_ids)}를 stress 누적에서 제외했습니다."
+        )
 
     scenario_flow_by_line: dict[str, float] = defaultdict(float)
     contributing_scenarios_by_line: dict[str, list[str]] = defaultdict(list)
@@ -103,6 +125,7 @@ def analyze_route_stress(
         base_flow_by_line=base_flow_by_line,
         base_flow_source_by_line=base_flow_source_by_line,
         scenario_flow_by_line=scenario_flow_by_line,
+        predicted_flow_by_line=resolved_predicted_flow_by_line,
         contributing_scenarios_by_line=contributing_scenarios_by_line,
     )
     node_stresses = _build_node_stresses(
@@ -134,6 +157,7 @@ def analyze_route_stress(
     )
     top_utilization_line_ids = _top_utilization_line_ids(line_stresses)
     max_utilization_line = _max_utilization_line(line_stresses)
+    predicted_flow_line_ids = sorted(resolved_predicted_flow_by_line)
 
     return StressAnalysisResult(
         scenario=scenario,
@@ -171,7 +195,9 @@ def analyze_route_stress(
             "max_utilization_line_id": max_utilization_line.line_id if max_utilization_line else "",
             "max_utilization": max_utilization_line.utilization if max_utilization_line else 0.0,
             "bottleneck_rule": "status>=warning or shared_route_count>=2",
-            "predicted_flow_source": "not_connected",
+            "predicted_flow_source": "prediction_result" if predicted_flow_line_ids else "not_connected",
+            "predicted_flow_line_ids": predicted_flow_line_ids,
+            "predicted_flow_total_mw": round(sum(resolved_predicted_flow_by_line.values()), 3),
         },
     )
 
@@ -225,6 +251,26 @@ def _monitoring_flow_by_line(
     }
 
 
+def _normalize_predicted_flow_by_line(
+    predicted_flow_by_line: dict[str, float] | None,
+) -> dict[str, float]:
+    if not predicted_flow_by_line:
+        return {}
+
+    normalized: dict[str, float] = {}
+    for line_id, value in predicted_flow_by_line.items():
+        if not line_id:
+            continue
+        try:
+            flow_mw = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not isfinite(flow_mw) or flow_mw <= 0.0:
+            continue
+        normalized[str(line_id)] = flow_mw
+    return normalized
+
+
 def _scenario_used_line_ids(
     transmission_scenario: TransmissionScenario,
     *,
@@ -261,6 +307,7 @@ def _build_line_stresses(
     base_flow_by_line: dict[str, float],
     base_flow_source_by_line: dict[str, str],
     scenario_flow_by_line: dict[str, float],
+    predicted_flow_by_line: dict[str, float],
     contributing_scenarios_by_line: dict[str, list[str]],
 ) -> list[LineStressSnapshot]:
     node_by_id = _grid_node_by_id(nodes)
@@ -271,7 +318,7 @@ def _build_line_stresses(
 
         base_flow_mw = base_flow_by_line.get(line.line_id, 0.0)
         scenario_flow_mw = scenario_flow_by_line.get(line.line_id, 0.0)
-        predicted_flow_mw = 0.0
+        predicted_flow_mw = predicted_flow_by_line.get(line.line_id, 0.0)
         total_flow_mw = base_flow_mw + scenario_flow_mw + predicted_flow_mw
         utilization = _utilization(total_flow_mw, line.capacity_mw)
         status = _status_for_utilization(utilization)
@@ -288,7 +335,7 @@ def _build_line_stresses(
                 capacity_mw=line.capacity_mw,
                 base_flow_mw=round(base_flow_mw, 3),
                 scenario_flow_mw=round(scenario_flow_mw, 3),
-                predicted_flow_mw=predicted_flow_mw,
+                predicted_flow_mw=round(predicted_flow_mw, 3),
                 total_flow_mw=round(total_flow_mw, 3),
                 utilization=round(utilization, 6) if isfinite(utilization) else utilization,
                 risk_level=risk_level,
@@ -305,6 +352,11 @@ def _build_line_stresses(
                     ),
                     "capacity_margin_mw": round(line.capacity_mw - total_flow_mw, 3),
                     "scenario_count": len(set(contributing_scenario_ids)),
+                    "predicted_flow_source": (
+                        "prediction_result"
+                        if line.line_id in predicted_flow_by_line
+                        else "not_connected"
+                    ),
                 },
             )
         )

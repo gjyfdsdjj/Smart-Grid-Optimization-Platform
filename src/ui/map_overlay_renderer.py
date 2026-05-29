@@ -1,6 +1,7 @@
 # MapOverlayResult를 Streamlit/Folium 지도 또는 표 fallback으로 렌더링한다.
 from __future__ import annotations
 
+from html import escape
 from typing import Any
 
 import pandas as pd
@@ -18,12 +19,20 @@ from src.data.schemas import (
 _KOREA_CENTER = [36.45, 127.85]
 _LINE_COLOR: dict[str, str] = {
     "normal": "#22c55e",
-    "warning": "#eab308",
-    "critical": "#ef4444",
-    "overload": "#991b1b",
+    "warning": "#f59e0b",
+    "critical": "#dc2626",
+    "overload": "#7f1d1d",
     "unknown": "#94a3b8",
     "selected": "#7c3aed",
 }
+_UTILIZATION_LINE_STYLES: tuple[tuple[float, str, int, float], ...] = (
+    (1.25, "#7f1d1d", 8, 0.98),
+    (1.0, "#dc2626", 7, 0.94),
+    (0.85, "#f97316", 6, 0.88),
+    (0.70, "#f59e0b", 5, 0.78),
+    (0.50, "#22c55e", 4, 0.62),
+    (0.0, "#64748b", 3, 0.45),
+)
 
 
 def render_map_overlay(
@@ -217,6 +226,29 @@ def line_style_for_status(status: str, *, selected: bool = False) -> dict[str, A
     }
 
 
+def line_style_for_utilization(
+    utilization: float,
+    *,
+    selected: bool = False,
+) -> dict[str, Any]:
+    if selected:
+        return line_style_for_status("selected", selected=True)
+
+    utilization = max(0.0, float(utilization))
+    for threshold, color, weight, opacity in _UTILIZATION_LINE_STYLES:
+        if utilization >= threshold:
+            return {
+                "color": color,
+                "weight": weight,
+                "opacity": opacity,
+            }
+    return {
+        "color": "#64748b",
+        "weight": 3,
+        "opacity": 0.45,
+    }
+
+
 def line_style_for_overlay_line(
     line: MapOverlayLine,
     *,
@@ -227,15 +259,19 @@ def line_style_for_overlay_line(
 
     stress_status = line.metadata.get("stress_status")
     status = stress_status if isinstance(stress_status, str) and stress_status else line.status
-    style = line_style_for_status(status)
-    if status == "warning":
-        style.update({"weight": 5, "opacity": 0.78})
-    elif status == "critical":
-        style.update({"weight": 6, "opacity": 0.88})
-    elif status == "overload":
-        style.update({"weight": 7, "opacity": 0.95})
+    utilization = _float_metadata(line.metadata.get("stress_utilization"))
+    if utilization is None:
+        utilization = _float_metadata(line.metadata.get("predicted_utilization"))
+    style = line_style_for_utilization(utilization) if utilization is not None else line_style_for_status(status)
+    if utilization is None:
+        if status == "warning":
+            style.update({"weight": 5, "opacity": 0.78})
+        elif status == "critical":
+            style.update({"weight": 6, "opacity": 0.88})
+        elif status == "overload":
+            style.update({"weight": 7, "opacity": 0.95})
     if line.metadata.get("is_bottleneck") is True:
-        if status == "normal":
+        if status == "normal" and (utilization is None or utilization < 0.70):
             style["color"] = "#f97316"
         style["weight"] = max(int(style["weight"]), 6)
         style["opacity"] = max(float(style["opacity"]), 0.86)
@@ -244,10 +280,25 @@ def line_style_for_overlay_line(
 
 def line_is_stress_highlighted(line: MapOverlayLine) -> bool:
     stress_status = line.metadata.get("stress_status")
+    stress_utilization = _float_metadata(line.metadata.get("stress_utilization"))
+    predicted_flow_mw = _float_metadata(line.metadata.get("stress_predicted_flow_mw"))
     return (
         stress_status in {"warning", "critical", "overload"}
         or line.metadata.get("is_bottleneck") is True
+        or (stress_utilization is not None and stress_utilization >= 0.50)
+        or (predicted_flow_mw is not None and predicted_flow_mw > 0.0)
     )
+
+
+def _float_metadata(value: object) -> float | None:
+    if isinstance(value, (float, int)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
 
 
 def split_overlay_lines_by_highlight(
@@ -273,6 +324,13 @@ def route_style_for_overlay_route(route: MapOverlayRoute) -> dict[str, Any]:
             "weight": 6,
             "opacity": 0.95,
             "dash_array": None,
+        }
+    if display_status == "improvement_candidate":
+        return {
+            "color": "#2563eb",
+            "weight": 5,
+            "opacity": 0.88,
+            "dash_array": "8",
         }
     if route.metadata.get("landing_visible") is True or display_status in {
         "active_simulation",
@@ -354,6 +412,7 @@ def _add_overlay_line(
         color=style["color"],
         weight=style["weight"],
         opacity=style["opacity"],
+        popup=folium.Popup(line_popup_html_for_overlay_line(line), max_width=460),
         tooltip=_line_tooltip(line, line_id),
     ).add_to(folium_map)
 
@@ -379,7 +438,7 @@ def _add_overlay_point(folium: Any, folium_map: Any, point: MapOverlayPoint) -> 
     folium.CircleMarker(
         location=[point.latitude, point.longitude],
         radius=style["radius"],
-        popup=_point_popup_html(point),
+        popup=folium.Popup(point_popup_html_for_overlay_point(point), max_width=460),
         tooltip=point.label,
         color=style["color"],
         fill=True,
@@ -420,17 +479,316 @@ def _point_stress_style(point: MapOverlayPoint) -> dict[str, Any] | None:
     return None
 
 
-def _point_popup_html(point: MapOverlayPoint) -> str:
-    html = (
-        f"<strong>{point.label}</strong><br>"
-        f"x: {point.longitude:.6f}<br>"
-        f"y: {point.latitude:.6f}<br>"
-        f"kind: {point.kind}"
+def point_popup_html_for_overlay_point(point: MapOverlayPoint) -> str:
+    metadata = point.metadata
+    rows = [
+        ("객체", "노드" if point.kind in {"power_plant", "transmission_tower"} else _kind_label(point.kind)),
+        ("노드 ID", _metadata_text(metadata, "node_id", point.overlay_id)),
+        ("이름", point.label),
+        ("유형", _metadata_text(metadata, "node_type", point.kind)),
+        ("전압", _format_kv(metadata.get("voltage_kv"))),
+        ("권장 용량", _format_mw(metadata.get("capacity_mw")) if point.kind == "tower_candidate" else ""),
+        ("예상 비용", _format_cost_billion(metadata.get("install_cost_billion"))),
+        ("완화 선로", _format_list(metadata.get("relief_line_ids"))),
+        ("제안 이유", _metadata_text(metadata, "reason")),
+        ("발전량", _format_mw(_first_present(metadata, "stress_node_generation_mw", "generation_mw"))),
+        ("부하량", _format_mw(_first_present(metadata, "stress_node_load_mw", "load_mw", "base_load_mw"))),
+        ("순주입량", _format_mw(_first_present(metadata, "stress_node_net_injection_mw", "net_injection_mw"))),
+        ("연결 선로 수", _metadata_text(metadata, "stress_node_connected_line_count")),
+        ("연결 선로", _format_list(metadata.get("stress_node_connected_line_ids"))),
+        ("연결 시나리오", _format_list(metadata.get("stress_node_connected_scenario_ids"))),
+        ("최대 연결 이용률", _format_percent(metadata.get("stress_node_max_connected_utilization"))),
+        ("최대 이용률 선로", _metadata_text(metadata, "stress_node_max_connected_line_id")),
+        ("위험도", _metadata_text(metadata, "stress_node_risk_level", point.risk_level or "")),
+        ("데이터 소스", "DC Power Flow + route stress" if "stress_node_risk_level" in metadata else str(point.source)),
+    ]
+    return _popup_table_html(point.label, rows)
+
+
+def line_popup_html_for_overlay_line(line: MapOverlayLine) -> str:
+    metadata = line.metadata
+    rows = [
+        ("객체", "선로"),
+        ("선로 ID", line_id_from_overlay_line(line)),
+        ("구간", line.label),
+        ("전압", _format_kv(metadata.get("voltage_kv"))),
+        ("용량", _format_mw(_first_present(metadata, "stress_capacity_mw", "capacity_mw"))),
+        ("기본 흐름", _format_mw(metadata.get("stress_base_flow_mw"))),
+        ("시나리오 추가 흐름", _format_mw(metadata.get("stress_scenario_flow_mw"))),
+        ("예측 추가 흐름", _format_mw(metadata.get("stress_predicted_flow_mw"))),
+        ("누적 총 흐름", _format_mw(metadata.get("stress_total_flow_mw"))),
+        ("누적 이용률", _format_percent(metadata.get("stress_utilization"))),
+        ("상태", _metadata_text(metadata, "stress_status", line.status)),
+        ("위험도", _metadata_text(metadata, "stress_risk_level", line.risk_level or "")),
+        ("공유 시나리오 수", _metadata_text(metadata, "stress_shared_route_count")),
+        ("기여 시나리오", _format_list(metadata.get("contributing_scenario_ids"))),
+        ("용량 여유", _format_mw(metadata.get("stress_capacity_margin_mw"))),
+    ]
+    return _popup_table_html(
+        line.label,
+        rows,
+        extra_html=(
+            _xai_popup_section_html(metadata)
+            + _improvement_popup_section_html(metadata)
+        ),
     )
-    max_utilization = point.metadata.get("stress_node_max_connected_utilization")
-    if isinstance(max_utilization, (float, int)):
-        html += f"<br>node max utilization: {max_utilization:.1%}"
-    max_line_id = point.metadata.get("stress_node_max_connected_line_id")
-    if isinstance(max_line_id, str) and max_line_id:
-        html += f"<br>max line: {max_line_id}"
-    return html
+
+
+def _popup_table_html(
+    title: str,
+    rows: list[tuple[str, object]],
+    *,
+    extra_html: str = "",
+) -> str:
+    visible_rows = [
+        (label, _stringify_popup_value(value))
+        for label, value in rows
+        if _stringify_popup_value(value)
+    ]
+    row_html = "".join(
+        "<tr>"
+        '<th style="border-top:1px solid #e5e7eb;color:#475569;'
+        'font-weight:600;min-width:104px;padding:5px 10px 5px 0;'
+        'text-align:left;vertical-align:top;white-space:nowrap;word-break:keep-all;">'
+        f"{escape(label)}</th>"
+        '<td style="border-top:1px solid #e5e7eb;color:#111827;'
+        'padding:5px 0;text-align:left;vertical-align:top;'
+        'white-space:normal;word-break:normal;overflow-wrap:anywhere;">'
+        f"{escape(value)}</td>"
+        "</tr>"
+        for label, value in visible_rows
+    )
+    return (
+        '<div style="min-width:380px;max-width:520px;max-height:360px;overflow:auto;'
+        'font-family:system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;'
+        'font-size:13px;line-height:1.35;">'
+        f'<div style="font-weight:700;font-size:15px;margin:0 0 8px;white-space:nowrap;">{escape(title)}</div>'
+        '<table style="border-collapse:collapse;table-layout:auto;width:100%;">'
+        f"{row_html}"
+        "</table>"
+        f"{extra_html}"
+        "</div>"
+    )
+
+
+def _xai_popup_section_html(metadata: dict[str, object]) -> str:
+    reason_summary = _metadata_text(metadata, "xai_reason_summary")
+    causes = _format_list_items(metadata.get("xai_bottleneck_causes"))
+    actions = _format_list_items(metadata.get("xai_recommended_actions"))
+    if not reason_summary and not causes and not actions:
+        return ""
+
+    after_metrics = metadata.get("xai_after_metrics")
+    before_metrics = metadata.get("xai_before_metrics")
+    current_utilization = ""
+    estimated_utilization = ""
+    estimated_rerouted_mw = ""
+    if isinstance(before_metrics, dict):
+        current_utilization = _format_percent(before_metrics.get("utilization"))
+    if isinstance(after_metrics, dict):
+        estimated_utilization = _format_percent(after_metrics.get("estimated_utilization"))
+        estimated_rerouted_mw = _format_mw(after_metrics.get("estimated_rerouted_mw"))
+
+    metric_rows = [
+        ("현재 이용률", current_utilization),
+        ("개선 후 추정 이용률", estimated_utilization),
+        ("예상 분산량", estimated_rerouted_mw),
+    ]
+    metrics_html = "".join(
+        "<tr>"
+        '<th style="color:#475569;font-weight:600;padding:3px 8px 3px 0;'
+        'text-align:left;white-space:nowrap;">'
+        f"{escape(label)}</th>"
+        '<td style="color:#111827;padding:3px 0;overflow-wrap:anywhere;">'
+        f"{escape(value)}</td>"
+        "</tr>"
+        for label, value in metric_rows
+        if value
+    )
+
+    return (
+        '<div style="border-top:1px solid #cbd5e1;margin-top:10px;padding-top:9px;">'
+        '<div style="font-weight:700;color:#0f172a;margin-bottom:5px;">xAI 설명</div>'
+        f'<div style="color:#111827;margin-bottom:7px;">{escape(reason_summary)}</div>'
+        f"{_list_section_html('주요 원인', causes)}"
+        f"{_list_section_html('권장 조치', actions)}"
+        '<table style="border-collapse:collapse;width:100%;margin-top:5px;">'
+        f"{metrics_html}"
+        "</table>"
+        "</div>"
+    )
+
+
+def _improvement_popup_section_html(metadata: dict[str, object]) -> str:
+    summary = _metadata_text(metadata, "improvement_summary")
+    if not summary:
+        return ""
+
+    before_utilization = _format_percent(metadata.get("improvement_best_before_utilization"))
+    after_utilization = _format_percent(metadata.get("improvement_best_after_utilization"))
+    added_distance = _format_km(metadata.get("improvement_best_added_distance_km"))
+    score = _metadata_text(metadata, "improvement_best_score")
+    suggested_node = _metadata_text(metadata, "improvement_suggested_node_label")
+    suggested_capacity = _format_mw(metadata.get("improvement_suggested_node_capacity_mw"))
+    suggested_cost = _format_cost_billion(metadata.get("improvement_suggested_node_cost_billion"))
+    rationale = _metadata_text(metadata, "improvement_best_rationale")
+    node_reason = _metadata_text(metadata, "improvement_suggested_node_reason")
+
+    metric_rows = [
+        ("적용 전 이용률", before_utilization),
+        ("적용 후 이용률", after_utilization),
+        ("추가 거리", added_distance),
+        ("개선 점수", score),
+        ("신규 후보", suggested_node),
+        ("권장 용량", suggested_capacity),
+        ("예상 비용", suggested_cost),
+    ]
+    metrics_html = "".join(
+        "<tr>"
+        '<th style="color:#475569;font-weight:600;padding:3px 8px 3px 0;'
+        'text-align:left;white-space:nowrap;">'
+        f"{escape(label)}</th>"
+        '<td style="color:#111827;padding:3px 0;overflow-wrap:anywhere;">'
+        f"{escape(value)}</td>"
+        "</tr>"
+        for label, value in metric_rows
+        if value
+    )
+    rationale_html = (
+        f'<div style="color:#111827;margin-top:6px;">{escape(rationale)}</div>'
+        if rationale
+        else ""
+    )
+    node_reason_html = (
+        f'<div style="color:#111827;margin-top:6px;">{escape(node_reason)}</div>'
+        if node_reason
+        else ""
+    )
+
+    return (
+        '<div style="border-top:1px solid #cbd5e1;margin-top:10px;padding-top:9px;">'
+        '<div style="font-weight:700;color:#0f172a;margin-bottom:5px;">개선안 제안</div>'
+        f'<div style="color:#111827;margin-bottom:7px;">{escape(summary)}</div>'
+        f"{rationale_html}"
+        f"{node_reason_html}"
+        '<table style="border-collapse:collapse;width:100%;margin-top:5px;">'
+        f"{metrics_html}"
+        "</table>"
+        "</div>"
+    )
+
+
+def _list_section_html(
+    title: str,
+    values: list[str],
+) -> str:
+    if not values:
+        return ""
+    item_html = "".join(f"<li>{escape(value)}</li>" for value in values)
+    return (
+        f'<div style="font-weight:600;color:#334155;margin:6px 0 2px;">{escape(title)}</div>'
+        '<ul style="margin:0 0 4px 1rem;padding:0;color:#111827;">'
+        f"{item_html}"
+        "</ul>"
+    )
+
+
+def _stringify_popup_value(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:.3f}".rstrip("0").rstrip(".")
+    if isinstance(value, (list, tuple, set)):
+        return _format_list(value)
+    return str(value)
+
+
+def _metadata_text(
+    metadata: dict[str, object],
+    key: str,
+    fallback: object = "",
+) -> str:
+    value = metadata.get(key, fallback)
+    return _stringify_popup_value(value)
+
+
+def _first_present(
+    metadata: dict[str, object],
+    *keys: str,
+) -> object:
+    for key in keys:
+        value = metadata.get(key)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _format_mw(value: object) -> str:
+    number = _coerce_float(value)
+    return f"{number:.2f} MW" if number is not None else ""
+
+
+def _format_kv(value: object) -> str:
+    number = _coerce_float(value)
+    return f"{number:.1f} kV" if number is not None else ""
+
+
+def _format_km(value: object) -> str:
+    number = _coerce_float(value)
+    return f"{number:.2f} km" if number is not None else ""
+
+
+def _format_percent(value: object) -> str:
+    number = _coerce_float(value)
+    return f"{number:.1%}" if number is not None else ""
+
+
+def _format_cost_billion(value: object) -> str:
+    number = _coerce_float(value)
+    return f"{number:.2f}십억" if number is not None else ""
+
+
+def _coerce_float(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (float, int)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _format_list(value: object) -> str:
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(item) for item in value if str(item))
+    if isinstance(value, str):
+        return value
+    return ""
+
+
+def _format_list_items(value: object) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value if str(item)]
+    if isinstance(value, str) and value:
+        return [value]
+    return []
+
+
+def _kind_label(kind: str) -> str:
+    labels = {
+        "power_plant": "발전소",
+        "transmission_tower": "송전탑",
+        "tower_candidate": "후보지",
+        "route_point": "경로점",
+        "install_point": "설치 지점",
+        "start_point": "시작점",
+        "end_point": "종료점",
+        "bus": "버스",
+        "line": "선로",
+        "risk_line": "위험 선로",
+        "route": "경로",
+    }
+    return labels.get(kind, kind)

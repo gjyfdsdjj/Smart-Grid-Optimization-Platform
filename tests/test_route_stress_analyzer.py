@@ -349,3 +349,31 @@ def test_monitoring_result_overrides_capacity_ratio_base_flow() -> None:
     assert result.metadata["base_flow_source_by_line"]["LINE_AB"] == "monitoring_result"
     assert "LINE_CB" in result.metadata["capacity_ratio_base_flow_line_ids"]
     assert any("DC Power Flow 결과에 없는 선로" in warning for warning in result.warnings)
+
+
+def test_prediction_flow_is_added_to_total_stress() -> None:
+    result = analyze_route_stress(
+        scenario=_scenario(),
+        grid_dataset=_dataset(),
+        transmission_scenarios=[],
+        load_scale=1.0,
+        predicted_flow_by_line={
+            "LINE_AB": 125.0,
+            "LINE_OFF": 999.0,
+            "LINE_UNKNOWN": 50.0,
+            "LINE_CB": -10.0,
+        },
+    )
+    line_ab = next(line for line in result.line_stresses if line.line_id == "LINE_AB")
+    line_cb = next(line for line in result.line_stresses if line.line_id == "LINE_CB")
+
+    assert line_ab.base_flow_mw == 175.0
+    assert line_ab.predicted_flow_mw == 125.0
+    assert line_ab.total_flow_mw == 300.0
+    assert line_ab.utilization == 0.6
+    assert line_ab.metadata["predicted_flow_source"] == "prediction_result"
+    assert line_cb.predicted_flow_mw == 0.0
+    assert result.metadata["predicted_flow_source"] == "prediction_result"
+    assert result.metadata["predicted_flow_line_ids"] == ["LINE_AB"]
+    assert result.metadata["predicted_flow_total_mw"] == 125.0
+    assert any("LINE_UNKNOWN" in warning for warning in result.warnings)

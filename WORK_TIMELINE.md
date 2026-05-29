@@ -1489,3 +1489,215 @@
   - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 176개 통과, 16개 deselected
   - `git diff --check -- app.py tests/test_app_landing_contract.py WORK_TIMELINE.md` -> 통과
 - 다음 작업: Prediction 결과를 app stress 입력으로 연결해 미래 부하 기반 위험 선로를 지도와 표에 반영한다.
+
+### 2026-05-29 Prediction 결과의 app stress 입력 연결
+- 작업: app 단일 운영 콘솔 통합의 10번 작업으로 `PredictionService` 결과를 app에서 선택적으로 실행하고, 예측 위험 선로의 `predicted_utilization`을 선로별 예측 추가 흐름으로 변환해 `RouteStressAnalyzer`에 연결했다.
+- 수정 파일: `app.py`, `src/engine/stress/route_stress_analyzer.py`, `tests/test_app_landing_contract.py`, `tests/test_route_stress_analyzer.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - sidebar `Prediction` 패널에서 예측 부하 반영 여부, 예측 모델(Mock/Baseline/LSTM/GNN/Neural GNN/LSTM+GNN/LSTM+Neural GNN), 그래프 표시 노드를 선택할 수 있다.
+  - 예측 부하 반영을 켜면 app이 현재 시나리오, 설치 지점, 전역 부하 배율 기준으로 `PredictionService`를 실행하고 결과를 session/cache에 저장한다.
+  - `PredictionResult.risk_lines`의 예측 이용률은 GridLine 용량 기준 예측 총 흐름으로 해석하고, DC Power Flow 기본 흐름 또는 capacity ratio 기본 흐름을 뺀 증가분만 `predicted_flow_mw`로 stress에 더한다.
+  - `analyze_route_stress()`는 `predicted_flow_by_line` 입력을 받아 기본 흐름 + 송전 시나리오 추가 흐름 + 예측 추가 흐름으로 누적 이용률과 위험/병목 선로를 계산한다.
+  - 예측 결과가 반영된 선로는 선로별 이용률 표와 선택 상세의 `예측 추가 흐름`에 표시되며, 위험 기준을 넘으면 기존 지도 강조/노드 stress 색상 흐름에도 함께 반영된다.
+  - Prediction 그래프 표시 노드로 고른 발전소/송전탑은 지도에서도 selected 상태로 표시하되, 송전 시나리오 시작/종료 선택 metadata는 덮어쓰지 않는다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/engine/stress/route_stress_analyzer.py tests/test_app_landing_contract.py tests/test_route_stress_analyzer.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_route_stress_analyzer.py -q` -> 8개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py -q` -> 35개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_route_stress_analyzer.py tests/test_map_overlay_renderer_contract.py -q` -> 52개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 180개 통과, 16개 deselected
+- 다음 작업: xAI 설명 생성으로 위험/병목 선로 클릭 시 변경 필요성, 대체 경로, 신규 송전탑 제안 이유를 상세 패널에 연결한다.
+
+### 2026-05-29 app Prediction 패널 노드 선택 제거
+- 작업: app 메인 지도에는 이미 운영 노드가 모두 표시되므로, sidebar `Prediction` 패널에서 `그래프 표시 노드` multiselect와 해당 선택 노드를 지도 selected 상태로 바꾸던 보조 흐름을 제거했다.
+- 수정 파일: `app.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - app `Prediction` 패널은 `예측 부하 반영`, `예측 모델`, 미래 위험 선로 수, source/fallback 표시만 담당한다.
+  - 예측 결과는 계속 `PredictionResult.risk_lines -> predicted_flow_by_line -> RouteStressAnalyzer` 흐름으로 선로 stress에 반영된다.
+  - 지도 노드의 selected 상태는 송전 시나리오 시작/종료 선택이나 실제 객체 선택 흐름에 집중한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py tests/test_app_landing_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_route_stress_analyzer.py tests/test_map_overlay_renderer_contract.py -q` -> 51개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 179개 통과, 16개 deselected
+- 다음 작업: xAI 설명 생성으로 위험/병목 선로 클릭 시 변경 필요성, 대체 경로, 신규 송전탑 제안 이유를 상세 패널에 연결한다.
+
+### 2026-05-29 선택 상세 Streamlit dialog 전환
+- 작업: app 지도에서 노드/선로를 선택했을 때 아래 고정 패널에 표시하던 `선택 상세`를 Streamlit `st.dialog` 기반 팝업으로 전환했다.
+- 수정 파일: `app.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 지도에서 노드 또는 선로를 클릭하면 기존처럼 `sgop_selected_grid_object`에 선택 객체를 저장한다.
+  - 선택 객체가 있으면 `선택 상세 - <객체명>` dialog가 열리고, 기존 DC Power Flow/stress 상세 row를 그대로 표시한다.
+  - dialog 안의 `닫기` 버튼은 선택 상태를 비우고 rerun해 팝업을 닫는다.
+  - 지도 아래에는 더 이상 `선택 상세` 고정 섹션을 표시하지 않고, `선로별 이용률`과 `위험/경고 선로` 요약은 그대로 유지한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py tests/test_app_landing_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py -q` -> 43개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 179개 통과, 16개 deselected
+- 다음 작업: xAI 설명 생성으로 위험/병목 선로 클릭 시 변경 필요성, 대체 경로, 신규 송전탑 제안 이유를 dialog 또는 별도 설명 패널에 연결한다.
+
+### 2026-05-29 선택 상세를 지도 객체 popup으로 통합
+- 작업: 노드 클릭 시 Folium marker popup과 Streamlit dialog가 동시에 보이던 흐름을 정리했다. Streamlit `st.dialog` 선택 상세를 제거하고, 지도 노드/선로 popup HTML 자체에 기존 선택 상세의 주요 운영 정보를 표 형태로 넣었다.
+- 수정 파일: `app.py`, `src/ui/map_overlay_renderer.py`, `tests/test_app_landing_contract.py`, `tests/test_map_overlay_renderer_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 노드 popup은 객체, 노드 ID, 이름, 유형, 전압, 발전량, 부하량, 순주입량, 연결 선로 수, 연결 선로, 연결 시나리오, 최대 연결 이용률, 최대 이용률 선로, 위험도, 데이터 소스를 표시한다.
+  - 선로 popup은 선로 ID, 구간, 전압, 용량, 기본 흐름, 시나리오 추가 흐름, 예측 추가 흐름, 누적 총 흐름, 누적 이용률, 상태, 위험도, 공유 시나리오, 기여 시나리오, 용량 여유를 표시한다.
+  - 지도 아래 고정 선택 상세와 Streamlit dialog는 제거했고, `선로별 이용률`과 `위험/경고 선로` 표는 그대로 유지한다.
+  - app은 여전히 선택 객체를 session state에 저장해 선로 선택 강조와 후속 xAI 연결에 사용할 수 있다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_map_overlay_renderer_contract.py tests/test_app_landing_contract.py -q` -> 45개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_route_stress_analyzer.py tests/test_map_overlay_renderer_contract.py -q` -> 53개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 181개 통과, 16개 deselected
+- 다음 작업: xAI 설명 생성으로 위험/병목 선로 클릭 시 변경 필요성, 대체 경로, 신규 송전탑 제안 이유를 지도 popup 또는 별도 xAI popup에 연결한다.
+
+### 2026-05-29 지도 객체 popup 표 줄바꿈 보정
+- 작업: Folium popup 안의 선택 상세 표에서 한글 항목명이 한 글자씩 세로로 줄바꿈되는 문제를 보정했다. 항목명 열에 고정 최소 폭과 `white-space: nowrap`, `word-break: keep-all`을 적용하고, 값 열은 긴 선로 ID만 자연스럽게 줄바꿈되도록 분리했다.
+- 수정 파일: `src/ui/map_overlay_renderer.py`, `tests/test_map_overlay_renderer_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 노드/선로 popup의 왼쪽 항목명은 `노드 ID`, `최대 연결 이용률`처럼 한 줄로 유지된다.
+  - 오른쪽 값은 긴 GridLine ID가 popup 폭을 넘길 때만 줄바꿈된다.
+  - popup 내부 최소 폭을 넓혀 발전량/부하량/연결 선로 같은 운영 정보가 읽기 쉬운 표 형태로 표시된다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall src/ui/map_overlay_renderer.py tests/test_map_overlay_renderer_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_map_overlay_renderer_contract.py -q` -> 11개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 181개 통과, 16개 deselected
+- 다음 작업: xAI 설명 생성으로 위험/병목 선로 클릭 시 변경 필요성, 대체 경로, 신규 송전탑 제안 이유를 지도 popup 또는 별도 xAI popup에 연결한다.
+
+### 2026-05-29 선로 xAI 설명 생성 및 지도 popup 연결
+- 작업: app 단일 운영 콘솔 통합의 11번 작업으로 LineStressSnapshot 기반 규칙형 xAI reporter를 추가하고, 위험/병목/공유 경로 선로 popup에 변경 필요성, 병목 원인, 권장 조치, 개선 후 추정 지표를 표시했다.
+- 수정 파일: `src/engine/explain/xai_reporter.py`, `app.py`, `src/ui/map_overlay_renderer.py`, `tests/test_xai_reporter.py`, `tests/test_app_landing_contract.py`, `tests/test_map_overlay_renderer_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `build_line_xai_explanation()`은 기본 흐름, 송전 시나리오 추가 흐름, 예측 추가 흐름, 누적 이용률, 용량 여유, 공유 시나리오 수를 기반으로 `XaiGridExplanation`을 만든다.
+  - `_attach_stress_metadata()`는 경고/위험/과부하/병목/공유 경로 선로에 xAI metadata를 주입한다.
+  - 지도 선로 popup은 기존 DC Power Flow/stress 상세 아래에 `xAI 설명`, `주요 원인`, `권장 조치`, 현재 이용률, 개선 후 추정 이용률, 예상 분산량을 표시한다.
+  - 개선 후 추정은 시나리오 추가 흐름의 30%를 우회 경로로 분산한다고 보는 MVP 설명용 휴리스틱이다.
+  - 실제 우회 경로 생성, 신규 송전탑 후보 위치 산출, 승인 후 GridDataset 반영은 12번 작업 범위로 남긴다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/engine/explain/xai_reporter.py src/ui/map_overlay_renderer.py tests/test_xai_reporter.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_xai_reporter.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py -q` -> 47개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_xai_reporter.py tests/test_app_landing_contract.py tests/test_route_stress_analyzer.py tests/test_map_overlay_renderer_contract.py -q` -> 55개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 183개 통과, 16개 deselected
+- 다음 작업: 12번 우회 경로/신규 송전탑 제안을 구현해 xAI 권장 조치가 실제 경로 후보와 신규 노드 후보로 이어지게 한다.
+
+### 2026-05-29 우회 경로 및 신규 송전탑 개선안 제안 연결
+- 작업: app 단일 운영 콘솔 통합의 12번 작업으로 xAI 권장 조치를 실제 개선안 후보로 연결했다. 선택된 병목/위험 선로를 기준으로 우회 가능한 송전 시나리오 경로를 계산하고, 필요 시 신규 송전탑 후보를 제안하며, 사용자가 app에서 우회 경로 또는 신규 송전탑 후보를 승인할 수 있게 했다.
+- 수정 파일: `src/data/schemas.py`, `src/engine/recommend/grid_improvement_recommender.py`, `app.py`, `src/ui/map_overlay_renderer.py`, `tests/test_grid_improvement_recommender.py`, `tests/test_operation_console_schema.py`, `tests/test_app_landing_contract.py`, `tests/test_map_overlay_renderer_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `RerouteCandidate`와 `GridImprovementProposal` 계약을 추가해 우회 후보, 신규 송전탑 후보, 적용 전/후 summary를 공통 스키마로 고정했다.
+  - `build_grid_improvement_proposal()`은 선택 선로의 `LineStressSnapshot`과 기여 송전 시나리오를 읽고, 해당 선로를 제외한 A* 우회 경로를 탐색한다.
+  - 우회 후보는 적용 전/후 목표 선로 이용률, 전체 최대 이용률, 병목/위험 선로 수, 추가 거리, 개선 점수를 계산한다.
+  - 우회만으로 부족하거나 선택 선로가 warning/critical/overload/shared 병목이면 `SuggestedGridNode` 신규 송전탑 후보를 생성한다. 위치는 병목 선로 양 끝 노드의 offset midpoint이고, 고도는 기존 2.5D fallback 계약대로 `not_queried`를 유지한다.
+  - app은 선택 선로 기준 개선안 패널을 표시하고, 우회 경로 후보는 지도에 파란 점선 경로로, 신규 송전탑 후보는 초록 후보 노드로 표시한다.
+  - 선로 popup에는 xAI 설명 아래 `개선안 제안` 섹션을 추가해 적용 전/후 이용률, 추가 거리, 개선 점수, 신규 송전탑 후보 정보를 함께 표시한다.
+  - `우회 경로 적용`은 해당 `TransmissionScenario`의 route/path/used_line_ids를 session state에서 교체하고 stress를 재계산한다.
+  - `신규 송전탑 후보 승인`은 원본 CSV를 수정하지 않고 `InstallationPoint(kind="transmission_tower", mode="review")`로 session state에 추가한 뒤 active 송전 시나리오 경로를 현재 GridDataset 기준으로 재계산한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/data/schemas.py src/engine/recommend/grid_improvement_recommender.py src/ui/map_overlay_renderer.py tests/test_grid_improvement_recommender.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_grid_improvement_recommender.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py -q` -> 50개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_grid_improvement_recommender.py tests/test_route_stress_analyzer.py tests/test_xai_reporter.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py -q` -> 60개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_operation_console_schema.py tests/test_grid_improvement_recommender.py -q` -> 6개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 189개 통과, 16개 deselected
+  - `git diff --check -- app.py src/data/schemas.py src/engine/recommend/grid_improvement_recommender.py src/ui/map_overlay_renderer.py tests/test_grid_improvement_recommender.py tests/test_operation_console_schema.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py` -> 통과
+- 다음 작업: 13번 app UI 운영 콘솔 정리로 sidebar/지도/개선안/선로표의 발표용 흐름과 밀도를 정돈한다.
+
+### 2026-05-29 app 운영 콘솔 UI 정보 구조 정리
+- 작업: app 단일 운영 콘솔 통합의 13번 작업으로 지도 중심 화면 위에 운영 KPI와 지도 레이어 범례를 추가하고, 지도 아래 분석 영역을 `개선안`, `선로별 이용률`, `위험/경고 선로`, `시나리오/설치` 탭으로 정리했다.
+- 수정 파일: `app.py`, `src/ui/map_overlay_renderer.py`, `tests/test_app_landing_contract.py`, `tests/test_map_overlay_renderer_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `_render_operation_status_bar()`가 작업 모드, 활성 시나리오 수, 병목 선로 수, 위험/과부하 수, 최대 이용률, 선택 선로, Prediction 반영 여부, 개선안 상태를 지도 위 KPI bar로 표시한다.
+  - `_render_map_layer_legend()`가 기본 송전망, 활성 송전 시나리오, 병목/위험 선로, 선택 선로, 우회 경로 후보, 신규 송전탑 후보의 색상 의미를 지도 바로 위에서 설명한다.
+  - 지도 아래는 `_render_operation_console_panels()`가 탭으로 재구성해 발표자가 `선로 클릭 -> 개선안 -> 이용률/위험 확인 -> 시나리오/설치 확인` 흐름을 따라가기 쉽게 했다.
+  - 개선안 탭은 선로를 선택하지 않은 초기 상태에서도 병목/위험 선로 클릭 안내를 표시하고, 선택 후에는 기존 우회 경로/신규 송전탑 승인 흐름을 유지한다.
+  - 시나리오/설치 탭에는 active/draft/disabled 송전 시나리오 표와 설치/제안 노드 목록을 함께 둬 세션 내 반영 상태를 확인할 수 있게 했다.
+  - `route_style_for_overlay_route()`는 `display_status="improvement_candidate"` 우회 후보를 파란 점선으로 명시해 범례와 실제 지도 스타일을 맞췄다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py -q` -> 52개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py tests/test_grid_improvement_recommender.py tests/test_xai_reporter.py tests/test_route_stress_analyzer.py -q` -> 64개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 193개 통과, 16개 deselected
+  - `git diff --check -- app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py` -> 통과
+- 다음 작업: 14번 테스트 및 발표용 화면 정리로 고정 시연 시나리오, 클릭 순서, 발표용 결과 화면을 확정한다.
+
+### 2026-05-29 legacy multipage navigation 숨김
+- 작업: `app.py`에 Monitoring/Simulation/Prediction/Optimization 기능이 운영 콘솔로 재구성된 상태를 기준으로, 기존 Streamlit multipage 자동 네비게이션을 화면에서 숨겼다. `pages/04_optimization.py`를 포함한 기존 페이지 파일은 삭제하지 않고 백업/legacy 경로로 유지한다.
+- 수정 파일: `.streamlit/config.toml`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - Streamlit 설정의 `client.showSidebarNavigation = false`로 기본 사이드바 페이지 목록을 비활성화했다.
+  - 왼쪽 사이드바에는 app 운영에 필요한 시나리오 관리, 운영 패널, Prediction/Stress 요약만 남는다.
+  - 기존 `pages/*` 파일은 보존되므로 필요하면 후속 백업 확인이나 직접 경로 점검에 사용할 수 있다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py tests/test_app_landing_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py -q` -> 41개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 194개 통과, 16개 deselected
+  - `git diff --check -- .streamlit/config.toml tests/test_app_landing_contract.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: 14번 테스트 및 발표용 화면 정리에서 고정 시연 시나리오와 발표용 클릭 순서를 확정한다.
+
+### 2026-05-29 선로별 이용률 막대 그래프 추가
+- 작업: app 운영 콘솔의 `선로별 이용률` 탭에서 표 아래에 누적 이용률 막대 그래프를 추가했다.
+- 수정 파일: `app.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - `선로 상태 필터`로 `전체/정상/경고/위험/과부하/병목만`을 바꾸면 같은 필터링 결과가 표와 막대 그래프에 동시에 반영된다.
+  - 막대 그래프는 이용률 높은 순서로 최대 20개 선로를 표시하고, 상태별 색상과 80%/95% 기준선을 함께 보여준다.
+  - hover에는 선로 ID, 구간, 이용률, 상태, 총 흐름, 용량, 병목 여부를 표시한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py tests/test_app_landing_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py -q` -> 41개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 194개 통과, 16개 deselected
+  - `git diff --check -- app.py tests/test_app_landing_contract.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: 14번 테스트 및 발표용 화면 정리에서 고정 시연 시나리오와 발표용 클릭 순서를 확정한다.
+
+### 2026-05-29 선로 이용률 그래프 한글 구간명 표시
+- 작업: 선로별 이용률 막대 그래프의 y축 라벨을 `GLINE_*` 선로 ID 대신 `From->To` 한글 구간명으로 표시하도록 바꿨다.
+- 수정 파일: `app.py`, `tests/test_app_landing_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 예: `GLINE_TOWER_DANGJIN_TOWER_PYEONGTAEK`은 그래프에서 `당진 송전탑->평택 송전탑`처럼 표시된다.
+  - 원래 선로 ID는 그래프 hover에 보조 정보로 유지해 디버깅과 데이터 추적이 가능하다.
+  - 표는 기존처럼 선로 ID와 From/To를 모두 보여주고, 그래프만 발표용 가독성 중심 라벨을 사용한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py tests/test_app_landing_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py -q` -> 42개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 195개 통과, 16개 deselected
+- 다음 작업: 14번 테스트 및 발표용 화면 정리에서 고정 시연 시나리오와 발표용 클릭 순서를 확정한다.
+
+### 2026-05-29 app 전역 부하 배율 상한 2.0 확장
+- 작업: app 운영 패널의 `시스템 전체 부하 배율` 상한을 1.5에서 2.0으로 확장하고, 내부 정규화 및 Monitoring DC Power Flow 입력 검증도 2.0까지 허용하도록 맞췄다.
+- 수정 파일: `app.py`, `src/services/monitoring_service.py`, `tests/test_app_landing_contract.py`, `tests/test_monitoring_page_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - app sidebar 전역 부하 배율 slider는 이제 `0.6 ~ 2.0` 범위를 제공한다.
+  - session state에 2.0 초과 값이 들어오면 app 정규화가 2.0으로 보정한다.
+  - MonitoringService도 2.0까지는 보정 없이 DC Power Flow 계산에 반영한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/services/monitoring_service.py tests/test_app_landing_contract.py tests/test_monitoring_page_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_monitoring_page_contract.py -q` -> 48개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 196개 통과, 16개 deselected
+  - `git diff --check -- app.py src/services/monitoring_service.py tests/test_app_landing_contract.py tests/test_monitoring_page_contract.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: 14번 테스트 및 발표용 화면 정리에서 고정 시연 시나리오와 발표용 클릭 순서를 확정한다.
+
+### 2026-05-29 Prediction 비교 브리핑 및 선로 이용률 색상 세분화
+- 작업: app 운영 콘솔에 `Prediction 비교` 탭을 추가하고, Baseline 대비 선택 모델의 미래 위험 선로 수, 예측 추가 MW, 최대 이용률, 병목/위험 선로 변화와 선로별 이용률 변화량을 표/막대 그래프로 확인할 수 있게 했다. 지도 선로 색상은 누적 이용률 기준 6단계로 세분화했다.
+- 수정 파일: `app.py`, `src/ui/map_overlay_renderer.py`, `tests/test_app_landing_contract.py`, `tests/test_map_overlay_renderer_contract.py`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - Prediction이 켜져 있으면 현재 선택 모델의 stress 결과와 별도로 같은 조건의 Baseline Prediction/stress 기준값을 만들어 비교한다.
+  - `Prediction 비교` 탭은 미래 위험 선로 수, 예측 추가 MW, 최대 이용률, 병목 선로, 위험/과부하 선로, 실제 모델 source, fallback 여부를 Baseline/선택 모델/변화로 보여준다.
+  - 선로별 비교 표와 막대 그래프는 Baseline 대비 선택 모델의 이용률 변화(pp)와 예측 추가 MW 변화를 표시한다. 음수는 선택 모델이 Baseline보다 해당 선로 stress를 낮춘 경우다.
+  - 지도 선로 색상은 `<50%`, `50-70%`, `70-85%`, `85-100%`, `100-125%`, `125%+` 단계로 나뉘며, 지도 범례도 같은 기준으로 갱신했다.
+  - 기존 위험/병목 강조와 선택 선로, 우회 경로 후보, 신규 송전탑 후보 표시는 유지한다.
+- 검증:
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py -q` -> 56개 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m compileall app.py pages src tests` -> 통과
+  - `PYTHONPYCACHEPREFIX=/tmp/sgop_pycache .venv/bin/python -m pytest -m "not integration and not slow" -q` -> 198개 통과, 16개 deselected
+  - `git diff --check -- app.py src/ui/map_overlay_renderer.py tests/test_app_landing_contract.py tests/test_map_overlay_renderer_contract.py WORK_TIMELINE.md` -> 통과
+- 다음 작업: 발표용 고정 시연 시나리오를 정하고, Baseline과 LSTM+Neural GNN(beta)의 차이가 가장 잘 보이는 부하 배율/송전 시나리오 조합을 저장한다.

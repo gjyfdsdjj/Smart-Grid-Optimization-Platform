@@ -2,8 +2,10 @@ from datetime import datetime
 
 from src.data.schemas import (
     FallbackInfo,
+    GridImprovementProposal,
     LineStressSnapshot,
     NodeStressSnapshot,
+    RerouteCandidate,
     RoutePoint,
     RouteResult,
     ScenarioContext,
@@ -151,3 +153,51 @@ def test_xai_explanation_and_suggested_node_hold_before_after_metrics() -> None:
     assert suggested_node.coordinate_system == "EPSG:4326"
     assert suggested_node.elevation_source == "not_queried"
     assert suggested_node.capacity_mw == 650.0
+
+
+def test_grid_improvement_proposal_groups_reroute_and_suggested_node() -> None:
+    route = RouteResult(
+        route_id="reroute-tx-001",
+        start_bus_id="TOWER_SEOUL",
+        end_bus_id="TOWER_DAEGU",
+        path_node_ids=["TOWER_SEOUL", "TOWER_DAEJEON", "TOWER_DAEGU"],
+        total_distance_km=240.0,
+        source="astar",
+    )
+    reroute = RerouteCandidate(
+        candidate_id="REROUTE_TX_001",
+        target_line_id="GLINE_TOWER_SEOUL_TOWER_DAEGU",
+        scenario_route_id="tx-001",
+        rerouted_path_node_ids=route.path_node_ids,
+        rerouted_line_ids=[
+            "GLINE_TOWER_SEOUL_TOWER_DAEJEON",
+            "GLINE_TOWER_DAEJEON_TOWER_DAEGU",
+        ],
+        avoided_line_ids=["GLINE_TOWER_SEOUL_TOWER_DAEGU"],
+        route=route,
+        before_target_utilization=0.98,
+        after_target_utilization=0.71,
+        score=46.2,
+    )
+    suggested_node = SuggestedGridNode(
+        suggested_node_id="SUGGESTED_TOWER_DAEGU_BYPASS",
+        label="대구 우회 송전탑 후보",
+        latitude=35.91,
+        longitude=128.49,
+        target_line_id="GLINE_TOWER_SEOUL_TOWER_DAEGU",
+    )
+
+    proposal = GridImprovementProposal(
+        proposal_id="IMPROVE_001",
+        target_line_id="GLINE_TOWER_SEOUL_TOWER_DAEGU",
+        reroute_candidates=[reroute],
+        suggested_nodes=[suggested_node],
+        before_summary={"max_utilization": 0.98},
+        after_summary={"max_utilization": 0.71},
+    )
+
+    assert proposal.fallback == FallbackInfo(enabled=False)
+    assert proposal.reroute_candidates[0].route is route
+    assert proposal.reroute_candidates[0].after_target_utilization == 0.71
+    assert proposal.suggested_nodes[0].status == "proposed"
+    assert proposal.before_summary["max_utilization"] > proposal.after_summary["max_utilization"]

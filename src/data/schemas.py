@@ -727,6 +727,53 @@ class SuggestedGridNode:
     metadata: dict[str, object] = field(default_factory=dict)
 
 
+@dataclass
+class RerouteCandidate:
+    """병목 선로를 피하기 위한 특정 송전 시나리오의 대체 경로 후보."""
+
+    candidate_id: str
+    target_line_id: str
+    scenario_route_id: str
+    scenario_label: str = ""
+    original_path_node_ids: list[str] = field(default_factory=list)
+    rerouted_path_node_ids: list[str] = field(default_factory=list)
+    original_line_ids: list[str] = field(default_factory=list)
+    rerouted_line_ids: list[str] = field(default_factory=list)
+    avoided_line_ids: list[str] = field(default_factory=list)
+    route: RouteResult | None = None
+    added_distance_km: float = 0.0
+    estimated_cost_delta: float = 0.0
+    before_target_utilization: float = 0.0
+    after_target_utilization: float = 0.0
+    before_max_utilization: float = 0.0
+    after_max_utilization: float = 0.0
+    before_bottleneck_line_count: int = 0
+    after_bottleneck_line_count: int = 0
+    before_critical_line_count: int = 0
+    after_critical_line_count: int = 0
+    score: float = 0.0
+    rationale: str = ""
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class GridImprovementProposal:
+    """선택된 병목 선로에 대한 우회 경로와 신규 송전탑 개선안 묶음."""
+
+    proposal_id: str
+    target_line_id: str
+    target_line_label: str = ""
+    created_at: datetime | None = None
+    reroute_candidates: list[RerouteCandidate] = field(default_factory=list)
+    suggested_nodes: list[SuggestedGridNode] = field(default_factory=list)
+    before_summary: dict[str, object] = field(default_factory=dict)
+    after_summary: dict[str, object] = field(default_factory=dict)
+    summary: str = ""
+    warnings: list[str] = field(default_factory=list)
+    fallback: FallbackInfo = field(default_factory=lambda: FallbackInfo(enabled=False))
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
 # ── 예측 피처 ─────────────────────────────────────────────────────────────────
 
 @dataclass
