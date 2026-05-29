@@ -44,5 +44,6 @@ def test_simulation_page_reads_landing_installations_as_user_candidates():
 
     assert "LANDING_INSTALLATIONS_KEY" in source
     assert "transmission_tower" in source
-    assert "user:" in source
+    assert "grid_node_id_for_installation" in source
     assert "user_candidate_points=user_candidate_points" in source
+    assert "user_grid_installations=landing_installations" in source

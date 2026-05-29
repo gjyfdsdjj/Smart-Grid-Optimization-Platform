@@ -36,13 +36,16 @@
 ## 현재 저장소 상태
 - `app.py`는 공통 sidebar 시나리오 관리와 대한민국 중심 2.5D 운영 지도를 제공한다.
 - 지도 클릭 좌표는 화면에 x/y만 표시하고, 내부 계약에는 `elevation_m=None`, `elevation_source="not_queried"`, `coordinate_system="EPSG:4326"`를 남긴다.
-- `pages/01_monitoring.py`는 `MonitoringService.run_dc_power_flow()`를 기본 제품 경로로 사용하고, 실패 시 `mock_data` fallback으로 내려간다.
-- `pages/02_simulation.py`는 `SimulationService.run_simulation()` 결과를 핵심 입력으로 사용하고, app 랜딩에서 추가한 송전탑 설치 지점을 `user:<installation_id>` 후보지로 함께 소비한다. A*/score/counterfactual delta 실패 시 `mock_data` fallback을 유지한다.
-- `pages/03_prediction.py`는 Mock/Baseline/LSTM/GNN/LSTM+GNN 경로를 제공하며, 고급 예측 경로 실패 시 baseline 또는 mock fallback으로 전환한다.
+- `data/grid/enhanced/`가 현재 기본 실행 CSV다. 발전소 12개, 송전탑/부하 노드 24개, GridLine 44개를 담은 현실성 강화 synthetic 데이터셋이며 실제 기관 원장 데이터는 아니다.
+- `src/data/loaders.py`의 `load_grid_dataset_or_default()`는 기본적으로 `data/grid/enhanced/`를 읽고, CSV가 없거나 깨지면 기본 Grid mock graph로 fallback한다.
+- `pages/01_monitoring.py`는 `MonitoringService.run_dc_power_flow()`를 기본 제품 경로로 사용한다. 입력은 `GridDataset -> BusInput/LineInput` 변환기에서 만들며, 실패 시에도 legacy B 노드가 아니라 GridDataset 기반 `mock_data` fallback으로 내려간다.
+- `pages/02_simulation.py`는 `SimulationService.run_simulation()` 결과를 핵심 입력으로 사용하고, 후보지는 기본/CSV 송전탑과 app 랜딩에서 추가한 송전탑 설치 지점을 함께 소비한다. A*/score/counterfactual delta 실패 시 `mock_data` fallback을 유지한다.
+- `pages/03_prediction.py`는 Mock/Baseline/LSTM/GNN/LSTM+GNN 경로를 제공하며, 고급 예측 경로 실패 시 baseline 또는 mock fallback으로 전환한다. 예측 축은 `GridNode.node_id`, GNN edge는 `GridLine` 기준이다.
 - `src/services/map_overlay_service.py`와 `src/ui/map_overlay_renderer.py`가 app/Monitoring/Simulation/Prediction의 공통 지도 overlay 계약과 렌더링을 담당한다.
 - `src/services/scenario_service.py`와 `src/ui/scenario_controls.py`가 `data/private/scenarios.json` 기반 시나리오 저장/불러오기/삭제 UI를 담당한다. 저장 대상은 `ScenarioContext`와 랜딩 설치 지점, Monitoring/Simulation/Prediction 주요 입력값을 묶은 `SavedScenarioState`다.
 - `Monitoring`, `Simulation`, `Prediction` 페이지는 Streamlit session state의 공통 `ScenarioContext`를 공유한다.
 - `src/data/schemas.py`가 페이지/서비스 간 공통 계약의 기준 파일이다.
+- 기존 `BUS_001~BUS_013`, `B01~B13`, `SITE_NORTH/CENTRAL/SOUTH` 실행 경로 하드코딩은 2026-05-29 Grid 전환 14단계에서 제거했다. 후속 새 코드는 이 ID를 다시 기준 데이터로 만들지 않는다.
 - `src/domain`, `src/utils`, `src/engine/explain`, `src/engine/optimize`, `src/engine/recommend`에는 아직 스텁 또는 후속 확장 영역이 남아 있다.
 
 ## 잊지 말아야 할 핵심 구조
@@ -204,12 +207,15 @@
 - fallback 규칙 초안을 `AGENTS.md`에 문서화하고, 세 서비스의 첫 warning 문구를 `mock_data fallback` 형식으로 통일했다.
 - 2026-05-17 기준으로 `InstallationPoint`, VWorld WMTS 2.5D tile 계약, app 랜딩 지도, Monitoring/Simulation/Prediction overlay, `SavedScenarioState` 기반 ScenarioService UI, 테스트 marker 체계가 추가되었다.
 - app/Monitoring/Simulation/Prediction은 모두 공통 `MapOverlayResult`와 `render_map_overlay()` 렌더러를 사용한다.
+- 2026-05-29 기준으로 Grid 전환 13~15단계가 반영되어 `data/grid/enhanced/`가 기본 실행 데이터셋이 되었고, Monitoring/Simulation/Prediction의 기본 실행 경로는 GridDataset/CSV 기반이다.
 - 빠른 테스트는 `pytest -m "not integration and not slow"`로 실행하고, raw data 기반 테스트는 `integration`, LSTM 로드/재학습 테스트는 `slow` marker로 분리한다.
 
 ## 앞으로 작업할 때 우선순위
-1. domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하되 `src/data/schemas.py`와 책임이 겹치지 않게 한다.
-2. 실제 VWorld 고도 조회를 붙이기 전 `elevation_source`, 조회 시각, fallback 여부 metadata를 확장한다.
-3. Scenario 저장 상태에 계산 결과를 포함할지 여부는 별도 계약으로 다룬다. 현재는 입력값만 저장하고 결과 캐시는 불러오기 시 비운다.
+1. `data/grid/enhanced/` synthetic 값을 실제 공개/기관 출처 데이터로 단계적으로 대체하되 기존 CSV 계약은 유지한다.
+2. Grid node/line 기준으로 LSTM/GNN 재학습 데이터셋과 저장 모델 호환 전략을 정리한다.
+3. 실제 VWorld 고도 조회를 붙이기 전 `elevation_source`, 조회 시각, fallback 여부 metadata를 확장한다.
+4. domain 스텁을 실제 `Bus`, `Line`, `Tower`, `Scenario` 모델로 정리하되 `src/data/schemas.py`와 책임이 겹치지 않게 한다.
+5. Scenario 저장 상태에 계산 결과를 포함할지 여부는 별도 계약으로 다룬다. 현재는 입력값만 저장하고 결과 캐시는 불러오기 시 비운다.
 
 ## 작업 타임라인 규칙
 - 작업 타임라인 기준 파일은 루트의 `WORK_TIMELINE.md`다.

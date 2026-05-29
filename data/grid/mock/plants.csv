@@ -1,0 +1,7 @@
+plant_id,plant_name,node_id,capacity_mw,fuel_type,min_output_mw,max_output_mw,ramp_rate_mw_per_h,availability,operating_cost,emission_factor,source
+PLANT_SPEC_INCHEON,인천 발전소,PLANT_INCHEON,1800,LNG,360,1800,300,0.95,82,0.42,default_asset
+PLANT_SPEC_GWANGJU,광주 발전소,PLANT_GWANGJU,1200,LNG,240,1200,220,0.95,84,0.42,default_asset
+PLANT_SPEC_SOKCHO,속초 발전소,PLANT_SOKCHO,700,LNG,140,700,150,0.93,86,0.42,default_asset
+PLANT_SPEC_BUSAN,부산 발전소,PLANT_BUSAN,1600,LNG,320,1600,280,0.95,83,0.42,default_asset
+PLANT_SPEC_ULSAN,울산 발전소,PLANT_ULSAN,2400,LNG,480,2400,400,0.96,80,0.42,default_asset
+PLANT_SPEC_POHANG,포항 발전소,PLANT_POHANG,1100,LNG,220,1100,220,0.94,85,0.42,default_asset

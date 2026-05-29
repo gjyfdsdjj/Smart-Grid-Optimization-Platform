@@ -4,7 +4,9 @@ import pandas as pd
 import streamlit as st
 
 from src.data.adapters.vworld_adapter import MapCapability, get_map_capability
+from src.data.grid_builder import grid_node_id_for_installation
 from src.data.schemas import (
+    GridDataset,
     InstallationPoint,
     MapOverlayResult,
     ScoreBreakdown,
@@ -27,22 +29,22 @@ st.set_page_config(page_title="시뮬레이션 | SGOP", layout="wide")
 
 
 def _user_candidate_id(installation: InstallationPoint) -> str:
-    return f"user:{installation.installation_id}"
+    return grid_node_id_for_installation(installation)
 
 
 def _split_candidate_selection(
     selected_candidate_ids: list[str],
     user_installations: list[InstallationPoint],
 ) -> tuple[list[str], list[InstallationPoint]]:
-    selected_user_ids = {
-        candidate_id
-        for candidate_id in selected_candidate_ids
-        if candidate_id.startswith("user:")
+    user_candidate_ids = {
+        _user_candidate_id(installation)
+        for installation in user_installations
     }
+    selected_user_ids = set(selected_candidate_ids) & user_candidate_ids
     engine_candidate_ids = [
         candidate_id
         for candidate_id in selected_candidate_ids
-        if not candidate_id.startswith("user:")
+        if candidate_id not in selected_user_ids
     ]
     user_candidate_points = [
         installation
@@ -65,11 +67,15 @@ shared_scenario = render_scenario_sidebar()
 bus_options = sim_service.list_bus_options()
 candidate_options = sim_service.list_candidate_options()
 bus_ids = [bus_id for bus_id, _label in bus_options]
-landing_tower_installations = [
+landing_installations = [
     installation
     for installation in st.session_state.get(LANDING_INSTALLATIONS_KEY, [])
     if isinstance(installation, InstallationPoint)
-    and installation.kind == "transmission_tower"
+]
+landing_tower_installations = [
+    installation
+    for installation in landing_installations
+    if installation.kind == "transmission_tower"
 ]
 user_candidate_options = [
     (_user_candidate_id(installation), f"사용자 추가 송전탑: {installation.label}")
@@ -201,10 +207,12 @@ def _build_map_overlay(
     *,
     map_capability: MapCapability,
 ) -> MapOverlayResult:
+    grid_dataset = sim_result.metadata.get("grid_dataset")
     baseline_monitoring = monitoring_service.run_dc_power_flow(
         scenario=sim_result.scenario,
         load_scale=sim_result.simulation_input.load_scale,
         created_at=sim_result.created_at,
+        grid_dataset=grid_dataset if isinstance(grid_dataset, GridDataset) else None,
     )
     return overlay_service.build_simulation_overlay(
         sim_result,
@@ -218,13 +226,13 @@ with st.sidebar:
     
     with st.form("simulation_form"):
         start_bus = st.selectbox(
-            "시작 버스",
+            "시작 노드",
             options=bus_ids,
             format_func=lambda x: dict(bus_options)[x],
             key=SIMULATION_START_BUS_KEY,
         )
         end_bus = st.selectbox(
-            "종료 버스",
+            "종료 노드",
             options=bus_ids,
             format_func=lambda x: dict(bus_options)[x],
             key=SIMULATION_END_BUS_KEY,
@@ -267,6 +275,7 @@ if submitted:
             end_bus_id=end_bus, 
             candidate_site_ids=engine_candidate_ids,
             user_candidate_points=user_candidate_points,
+            user_grid_installations=landing_installations,
             load_scale=load_scale
         )
         sim_result = sim_service.run_simulation(

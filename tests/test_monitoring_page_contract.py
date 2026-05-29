@@ -88,6 +88,16 @@ def test_monitoring_overlay_line_ids_match_status_table_source():
     assert all(line.metadata["line_id"] in source_line_ids for line in overlay.lines)
 
 
+def test_monitoring_load_scale_accepts_two_times_upper_bound():
+    result = MonitoringService().run_dc_power_flow(
+        scenario=_scenario(),
+        created_at=datetime(2026, 5, 17, 12, 0),
+        load_scale=2.0,
+    )
+
+    assert result.load_scale == 2.0
+
+
 def test_selected_line_style_is_visibly_emphasized():
     base = line_style_for_status("warning", selected=False)
     selected = line_style_for_status("warning", selected=True)

@@ -6,11 +6,12 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.data.adapters.vworld_adapter import get_map_capability
-from src.data.schemas import MonitoringKpi, MonitoringResult, ScenarioContext
+from src.data.schemas import InstallationPoint, MonitoringKpi, MonitoringResult, ScenarioContext
 from src.services.map_overlay_service import MapOverlayService
 from src.services.monitoring_service import MonitoringService
 from src.ui.map_overlay_renderer import overlay_warnings_for_display, render_map_overlay
 from src.ui.scenario_controls import MONITORING_DATA_SOURCE_KEY, MONITORING_LOAD_SCALE_KEY
+from src.ui.scenario_controls import LANDING_INSTALLATIONS_KEY
 from src.ui.scenario_controls import render_scenario_sidebar
 from src.ui.table_selection import selected_value_from_dataframe_event
 
@@ -82,12 +83,18 @@ def _load_monitoring_result(
     data_source: str,
     scenario: ScenarioContext,
     load_scale: float,
+    user_installations: list[object] | None = None,
 ) -> MonitoringResult:
     try:
         if data_source == "DC Power Flow":
             return service.run_dc_power_flow(
                 scenario=scenario,
                 load_scale=load_scale,
+                user_installations=[
+                    installation
+                    for installation in user_installations or []
+                    if isinstance(installation, InstallationPoint)
+                ],
             )
         return service.run_mock_monitoring(
             scenario=scenario,
@@ -148,6 +155,7 @@ with st.spinner("모니터링 결과를 생성하는 중입니다..."):
         data_source=data_source,
         scenario=shared_scenario,
         load_scale=load_scale,
+        user_installations=st.session_state.get(LANDING_INSTALLATIONS_KEY, []),
     )
 
 st.session_state.sgop_shared_scenario = result.scenario

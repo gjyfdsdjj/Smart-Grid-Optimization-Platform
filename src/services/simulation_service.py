@@ -16,8 +16,14 @@ from src.engine.powerflow.congestion_metrics import (
     compute_congestion_summary,
     compute_line_statuses,
 )
+from src.data.grid_builder import grid_node_id_for_installation
+from src.data.loaders import load_grid_dataset_or_default
+from src.data.grid_powerflow_adapter import build_powerflow_inputs_from_grid
 from src.data.schemas import (
     FallbackInfo,
+    GridDataset,
+    GridLine,
+    GridNode,
     InstallationPoint,
     MonitoringResult,
     RecommendationResult,
@@ -34,7 +40,6 @@ from src.engine.search.astar_router import (
     GraphEdgeSpec,
     RouteCandidateSpec,
     build_astar_route,
-    build_k_nearest_edges,
     build_mock_route,
 )
 from src.engine.search.score_function import (
@@ -46,72 +51,28 @@ from src.engine.search.score_function import (
     rank_recommendations,
 )
 
-
-_BUS_METADATA: dict[str, dict[str, float | str]] = {
-    "BUS_001": {"name": "서울", "latitude": 37.5665, "longitude": 126.9780},
-    "BUS_002": {"name": "인천", "latitude": 37.4563, "longitude": 126.7052},
-    "BUS_003": {"name": "수원", "latitude": 37.2636, "longitude": 127.0286},
-    "BUS_004": {"name": "춘천", "latitude": 37.8813, "longitude": 127.7298},
-    "BUS_005": {"name": "강릉", "latitude": 37.7519, "longitude": 128.8761},
-    "BUS_006": {"name": "원주", "latitude": 37.3422, "longitude": 127.9202},
-    "BUS_007": {"name": "대전", "latitude": 36.3504, "longitude": 127.3845},
-    "BUS_008": {"name": "청주", "latitude": 36.6424, "longitude": 127.4890},
-    "BUS_009": {"name": "광주", "latitude": 35.1595, "longitude": 126.8526},
-    "BUS_010": {"name": "전주", "latitude": 35.8242, "longitude": 127.1480},
-    "BUS_011": {"name": "대구", "latitude": 35.8714, "longitude": 128.6014},
-    "BUS_012": {"name": "울산", "latitude": 35.5384, "longitude": 129.3114},
-    "BUS_013": {"name": "부산", "latitude": 35.1796, "longitude": 129.0756},
-}
-
-_DEFAULT_CANDIDATES: dict[str, dict[str, float | str]] = {
-    "SITE_NORTH": {
-        "label": "북부 우회안",
-        "latitude": 36.9300,
-        "longitude": 127.5200,
-        "distance_km": 48.0,
-        "construction_cost": 19.5,
-        "congestion_relief": 32.0,
-        "environmental_risk": 6.5,
-        "policy_risk": 4.0,
-    },
-    "SITE_CENTRAL": {
-        "label": "중앙 균형안",
-        "latitude": 36.2800,
-        "longitude": 127.7600,
-        "distance_km": 41.0,
-        "construction_cost": 17.0,
-        "congestion_relief": 29.0,
-        "environmental_risk": 4.0,
-        "policy_risk": 3.0,
-    },
-    "SITE_SOUTH": {
-        "label": "남부 확장안",
-        "latitude": 35.9800,
-        "longitude": 128.0500,
-        "distance_km": 54.0,
-        "construction_cost": 15.0,
-        "congestion_relief": 24.0,
-        "environmental_risk": 3.0,
-        "policy_risk": 2.5,
-    },
-}
+DEFAULT_START_NODE_ID = "PLANT_INCHEON"
+DEFAULT_END_NODE_ID = "TOWER_DAEGU"
+DEFAULT_HUB_NODE_ID = "TOWER_DAEJEON"
 
 
 class SimulationService:
     """시뮬레이션 페이지용 mock 입력과 결과를 공통 계약 형식으로 맞춘다."""
 
     def list_bus_options(self) -> list[tuple[str, str]]:
-        """페이지 입력용 버스 선택 옵션을 반환한다."""
+        """페이지 입력용 Grid 노드 선택 옵션을 반환한다."""
+        dataset = load_grid_dataset_or_default()
         return [
-            (bus_id, str(metadata["name"]))
-            for bus_id, metadata in _BUS_METADATA.items()
+            (node.node_id, _grid_node_option_label(node))
+            for node in dataset.nodes
         ]
 
     def list_candidate_options(self) -> list[tuple[str, str]]:
-        """페이지 입력용 후보지 선택 옵션을 반환한다."""
+        """페이지 입력용 송전탑 후보 선택 옵션을 반환한다."""
+        dataset = load_grid_dataset_or_default()
         return [
-            (candidate_id, str(candidate["label"]))
-            for candidate_id, candidate in _DEFAULT_CANDIDATES.items()
+            (tower.node_id, tower.tower_name)
+            for tower in dataset.tower_candidates
         ]
 
     def build_default_input(
@@ -119,17 +80,23 @@ class SimulationService:
         scenario: ScenarioContext | None = None,
         *,
         created_at: datetime | None = None,
-        start_bus_id: str = "BUS_001",
-        end_bus_id: str = "BUS_011",
+        start_bus_id: str = DEFAULT_START_NODE_ID,
+        end_bus_id: str = DEFAULT_END_NODE_ID,
         candidate_site_ids: list[str] | None = None,
         user_candidate_points: list[InstallationPoint] | None = None,
+        user_grid_installations: list[InstallationPoint] | None = None,
         load_scale: float = 1.0,
         notes: str = "",
     ) -> SimulationInput:
         resolved_at = _round_to_hour(created_at or datetime.now())
         resolved_scenario = self._resolve_scenario(scenario, resolved_at)
+        seed_dataset = load_grid_dataset_or_default(
+            user_installations=user_grid_installations or user_candidate_points or [],
+            created_at=resolved_at,
+            load_scale=load_scale,
+        )
         resolved_candidate_site_ids = (
-            list(_DEFAULT_CANDIDATES)
+            [tower.node_id for tower in seed_dataset.tower_candidates]
             if candidate_site_ids is None
             else list(candidate_site_ids)
         )
@@ -140,6 +107,7 @@ class SimulationService:
             end_bus_id=end_bus_id,
             candidate_site_ids=resolved_candidate_site_ids,
             user_candidate_points=list(user_candidate_points or []),
+            user_grid_installations=list(user_grid_installations or []),
             load_scale=load_scale,
             notes=notes,
         )
@@ -152,7 +120,16 @@ class SimulationService:
     ) -> SimulationResult:
         resolved_at = _round_to_hour(created_at or datetime.now())
         resolved_input, input_warnings = self._normalize_input(simulation_input, resolved_at)
-        recommendations = self._build_recommendations(resolved_input, use_actual_route=False)
+        grid_dataset = self._build_grid_dataset_for_input(resolved_input, resolved_at)
+        resolved_input, grid_warnings = self._normalize_grid_selection(
+            resolved_input,
+            grid_dataset=grid_dataset,
+        )
+        recommendations = self._build_recommendations(
+            resolved_input,
+            use_actual_route=False,
+            grid_dataset=grid_dataset,
+        )
         deltas = self._build_mock_deltas(
             resolved_input,
             recommendations[0] if recommendations else None,
@@ -164,13 +141,14 @@ class SimulationService:
             source="mock",
             recommendations=recommendations,
             deltas=deltas,
-            warnings=input_warnings + [build_fallback_warning("SimulationService", "mock_data")],
+            warnings=input_warnings + grid_warnings + [build_fallback_warning("SimulationService", "mock_data")],
             fallback=build_fallback_info(
                 mode="mock_data",
                 reason="실제 A* 탐색과 점수화 대신 search 엔진의 mock 계약 함수를 사용합니다.",
                 primary_path="src.engine.search.astar_router -> src.engine.search.score_function",
                 active_path="src.services.simulation_service.SimulationService.run_mock_simulation",
             ),
+            metadata={"grid_dataset": grid_dataset, "legacy_candidate_source": False},
         )
 
     def run_simulation(
@@ -187,17 +165,24 @@ class SimulationService:
 
         resolved_at = _round_to_hour(created_at or datetime.now())
         resolved_input, input_warnings = self._normalize_input(simulation_input, resolved_at)
+        grid_dataset = self._build_grid_dataset_for_input(resolved_input, resolved_at)
+        resolved_input, grid_warnings = self._normalize_grid_selection(
+            resolved_input,
+            grid_dataset=grid_dataset,
+        )
 
         try:
             monitoring_before = self._get_monitoring_baseline(
                 simulation_input=resolved_input,
                 created_at=resolved_at,
+                grid_dataset=grid_dataset,
             )
             recommendations, candidate_deltas_by_id, impact_warnings = (
                 self._build_recommendation_bundle(
                     resolved_input,
                     use_actual_route=True,
                     monitoring_before=monitoring_before,
+                    grid_dataset=grid_dataset,
                 )
             )
             deltas, delta_warnings, fallback = self._resolve_deltas(
@@ -213,8 +198,9 @@ class SimulationService:
                 source="astar",
                 recommendations=recommendations,
                 deltas=deltas,
-                warnings=input_warnings + impact_warnings + delta_warnings,
+                warnings=input_warnings + grid_warnings + impact_warnings + delta_warnings,
                 fallback=fallback,
+                metadata={"grid_dataset": grid_dataset, "legacy_candidate_source": False},
             )
 
         except Exception as exc:  # noqa: BLE001
@@ -264,26 +250,31 @@ class SimulationService:
             warnings.append("SimulationInput이 없어 기본 mock 입력을 사용합니다.")
             return self.build_default_input(created_at=created_at), warnings
 
-        start_bus_id = simulation_input.start_bus_id or "BUS_001"
-        end_bus_id = simulation_input.end_bus_id or "BUS_011"
+        start_bus_id = simulation_input.start_bus_id or DEFAULT_START_NODE_ID
+        end_bus_id = simulation_input.end_bus_id or DEFAULT_END_NODE_ID
         user_candidate_points = [
             point
             for point in simulation_input.user_candidate_points
             if isinstance(point, InstallationPoint)
         ]
+        user_grid_installations = [
+            point
+            for point in simulation_input.user_grid_installations
+            if isinstance(point, InstallationPoint)
+        ]
+        if not user_grid_installations:
+            user_grid_installations = list(user_candidate_points)
         candidate_site_ids = list(simulation_input.candidate_site_ids)
-        if not candidate_site_ids and not user_candidate_points:
-            candidate_site_ids = list(_DEFAULT_CANDIDATES)
         scenario = simulation_input.scenario
 
         if not simulation_input.start_bus_id:
-            warnings.append("시작 버스가 비어 있어 BUS_001을 사용합니다.")
+            warnings.append(f"시작 노드가 비어 있어 {DEFAULT_START_NODE_ID}를 사용합니다.")
         if not simulation_input.end_bus_id:
-            warnings.append("종료 버스가 비어 있어 BUS_011을 사용합니다.")
-        if not simulation_input.candidate_site_ids and not user_candidate_points:
-            warnings.append("후보지가 비어 있어 기본 후보 3개를 사용합니다.")
+            warnings.append(f"종료 노드가 비어 있어 {DEFAULT_END_NODE_ID}를 사용합니다.")
         if len(user_candidate_points) < len(simulation_input.user_candidate_points):
             warnings.append("일부 사용자 설치 후보가 InstallationPoint 계약이 아니어서 제외했습니다.")
+        if len(user_grid_installations) < len(simulation_input.user_grid_installations):
+            warnings.append("일부 사용자 Grid 설치 지점이 InstallationPoint 계약이 아니어서 제외했습니다.")
         if scenario.created_at is None:
             scenario.created_at = created_at
 
@@ -295,6 +286,7 @@ class SimulationService:
                 end_bus_id=end_bus_id,
                 candidate_site_ids=candidate_site_ids,
                 user_candidate_points=user_candidate_points,
+                user_grid_installations=user_grid_installations,
             ),
             warnings,
         )
@@ -304,12 +296,14 @@ class SimulationService:
         simulation_input: SimulationInput,
         *,
         use_actual_route: bool,
+        grid_dataset: GridDataset,
         monitoring_before: MonitoringResult | None = None,
     ) -> list[RecommendationResult]:
         recommendations, _, _ = self._build_recommendation_bundle(
             simulation_input,
             use_actual_route=use_actual_route,
             monitoring_before=monitoring_before,
+            grid_dataset=grid_dataset,
         )
         return recommendations
 
@@ -319,6 +313,7 @@ class SimulationService:
         *,
         use_actual_route: bool,
         monitoring_before: MonitoringResult | None = None,
+        grid_dataset: GridDataset,
     ) -> tuple[
         list[RecommendationResult],
         dict[str, list[SimulationDelta]],
@@ -327,14 +322,24 @@ class SimulationService:
         scored_recommendations: list[RecommendationResult] = []
         candidate_deltas_by_id: dict[str, list[SimulationDelta]] = {}
         warnings: list[str] = []
-        bus_nodes = self._build_bus_nodes() if use_actual_route else []
-        bus_edges = self._build_bus_edges(bus_nodes) if use_actual_route else []
-        start_bus = _to_bus_node_spec(simulation_input.start_bus_id)
-        end_bus = _to_bus_node_spec(simulation_input.end_bus_id)
-        hub_bus_id = "BUS_007" if simulation_input.end_bus_id != "BUS_007" else "BUS_010"
-        hub_bus = _to_bus_node_spec(hub_bus_id)
+        node_by_id = _grid_node_by_id(grid_dataset)
+        bus_nodes = self._build_bus_nodes(grid_dataset) if use_actual_route else []
+        bus_edges = self._build_bus_edges(grid_dataset) if use_actual_route else []
+        start_bus = _to_grid_bus_node_spec(simulation_input.start_bus_id, node_by_id)
+        end_bus = _to_grid_bus_node_spec(simulation_input.end_bus_id, node_by_id)
+        hub_bus = _select_grid_hub_bus(
+            grid_dataset,
+            start_node_id=simulation_input.start_bus_id,
+            end_node_id=simulation_input.end_bus_id,
+        )
 
-        for index, (candidate_id, candidate) in enumerate(_build_candidate_records(simulation_input)):
+        candidate_records, candidate_record_warnings = _build_candidate_records(
+            simulation_input,
+            grid_dataset=grid_dataset,
+        )
+        warnings.extend(candidate_record_warnings)
+
+        for candidate_id, candidate in candidate_records:
             route = self._build_candidate_route(
                 simulation_input=simulation_input,
                 candidate_id=candidate_id,
@@ -415,7 +420,7 @@ class SimulationService:
         candidate: dict[str, float | str],
         start_bus: BusNodeSpec,
         end_bus: BusNodeSpec,
-        hub_bus: BusNodeSpec,
+        hub_bus: BusNodeSpec | None,
         bus_nodes: list[BusNodeSpec],
         bus_edges: list[GraphEdgeSpec],
         use_actual_route: bool,
@@ -463,11 +468,13 @@ class SimulationService:
         *,
         simulation_input: SimulationInput,
         created_at: datetime,
+        grid_dataset: GridDataset,
     ) -> MonitoringResult:
         return MonitoringService().run_dc_power_flow(
             scenario=simulation_input.scenario,
             load_scale=simulation_input.load_scale,
             created_at=created_at,
+            grid_dataset=grid_dataset,
         )
 
     def _resolve_deltas(
@@ -560,6 +567,7 @@ class SimulationService:
         deltas: list[SimulationDelta],
         warnings: list[str],
         fallback: FallbackInfo,
+        metadata: dict[str, object] | None = None,
     ) -> SimulationResult:
         selected_route = recommendations[0].route if recommendations else None
         return SimulationResult(
@@ -573,6 +581,7 @@ class SimulationService:
             summary=self._build_summary(simulation_input, recommendations, deltas),
             warnings=warnings,
             fallback=fallback,
+            metadata=metadata or {},
         )
 
     def _build_rationale(
@@ -730,16 +739,21 @@ class SimulationService:
         monitoring_before: MonitoringResult,
         top_recommendation: RecommendationResult | None,
     ) -> tuple[MonitoringResult, list[str]]:
-        buses = _dcpf.build_default_buses(simulation_input.load_scale)
+        grid_dataset = _grid_dataset_from_monitoring(monitoring_before)
+        powerflow_inputs = build_powerflow_inputs_from_grid(grid_dataset)
         line_inputs, reinforced_line_ids = self._build_counterfactual_line_inputs(
             monitoring_before=monitoring_before,
             top_recommendation=top_recommendation,
+            base_line_inputs=powerflow_inputs.lines,
         )
-        dc_result = _dcpf.solve(buses, line_inputs)
+        dc_result = _dcpf.solve(powerflow_inputs.buses, line_inputs)
         if not dc_result.converged:
             raise RuntimeError(dc_result.error)
 
-        line_statuses = compute_line_statuses(dc_result)
+        line_statuses = compute_line_statuses(
+            dc_result,
+            bus_names=powerflow_inputs.bus_names,
+        )
         congestion_summary = compute_congestion_summary(line_statuses)
         reinforced_label = ", ".join(reinforced_line_ids) if reinforced_line_ids else "없음"
         warnings = [
@@ -761,6 +775,12 @@ class SimulationService:
                 ),
                 warnings=warnings,
                 fallback=build_no_fallback_info(),
+                metadata={
+                    "grid_dataset": grid_dataset,
+                    "slack_bus_id": powerflow_inputs.slack_bus_id,
+                    "counterfactual_reinforced_line_ids": reinforced_line_ids,
+                    "legacy_bus_source": False,
+                },
             ),
             warnings,
         )
@@ -770,8 +790,9 @@ class SimulationService:
         *,
         monitoring_before: MonitoringResult,
         top_recommendation: RecommendationResult | None,
+        base_line_inputs: list[_dcpf.LineInput],
     ) -> tuple[list[_dcpf.LineInput], list[str]]:
-        line_inputs = _dcpf.build_default_line_inputs()
+        line_inputs = list(base_line_inputs)
         if top_recommendation is None or top_recommendation.score is None:
             return line_inputs, []
 
@@ -1185,17 +1206,79 @@ class SimulationService:
             f"{utilization_text}"
         )
 
-    def _build_bus_nodes(self) -> list[BusNodeSpec]:
+    def _build_grid_dataset_for_input(
+        self,
+        simulation_input: SimulationInput,
+        created_at: datetime,
+    ) -> GridDataset:
+        return load_grid_dataset_or_default(
+            user_installations=simulation_input.user_grid_installations,
+            created_at=created_at,
+            load_scale=simulation_input.load_scale,
+        )
+
+    def _normalize_grid_selection(
+        self,
+        simulation_input: SimulationInput,
+        *,
+        grid_dataset: GridDataset,
+    ) -> tuple[SimulationInput, list[str]]:
+        warnings: list[str] = []
+        node_ids = {node.node_id for node in grid_dataset.nodes}
+        candidate_ids = {tower.node_id for tower in grid_dataset.tower_candidates}
+        start_bus_id = simulation_input.start_bus_id
+        end_bus_id = simulation_input.end_bus_id
+        selected_candidate_ids = [
+            candidate_id
+            for candidate_id in simulation_input.candidate_site_ids
+            if candidate_id in candidate_ids
+        ]
+        dropped_candidate_ids = [
+            candidate_id
+            for candidate_id in simulation_input.candidate_site_ids
+            if candidate_id not in candidate_ids
+        ]
+
+        if start_bus_id not in node_ids:
+            warnings.append(
+                f"시작 노드 {start_bus_id}가 GridDataset에 없어 {DEFAULT_START_NODE_ID}를 사용합니다."
+            )
+            start_bus_id = DEFAULT_START_NODE_ID
+        if end_bus_id not in node_ids:
+            warnings.append(
+                f"종료 노드 {end_bus_id}가 GridDataset에 없어 {DEFAULT_END_NODE_ID}를 사용합니다."
+            )
+            end_bus_id = DEFAULT_END_NODE_ID
+        if dropped_candidate_ids:
+            warnings.append(
+                "GridDataset에 없는 후보지를 제외했습니다: "
+                + ", ".join(sorted(dropped_candidate_ids))
+            )
+        if not selected_candidate_ids and not simulation_input.user_candidate_points:
+            selected_candidate_ids = sorted(candidate_ids)
+            warnings.append("후보지가 비어 있어 기본 송전탑 GridNode 후보를 사용합니다.")
+
+        return (
+            replace(
+                simulation_input,
+                start_bus_id=start_bus_id,
+                end_bus_id=end_bus_id,
+                candidate_site_ids=selected_candidate_ids,
+            ),
+            warnings,
+        )
+
+    def _build_bus_nodes(self, grid_dataset: GridDataset) -> list[BusNodeSpec]:
         return [
-            _to_bus_node_spec(bus_id)
-            for bus_id in _BUS_METADATA
+            _to_grid_bus_node_spec(node.node_id, _grid_node_by_id(grid_dataset))
+            for node in grid_dataset.nodes
         ]
 
     def _build_bus_edges(
         self,
-        bus_nodes: list[BusNodeSpec],
+        grid_dataset: GridDataset,
     ) -> list[GraphEdgeSpec]:
-        return build_k_nearest_edges(bus_nodes, neighbor_count=3)
+        return _grid_edges_to_graph_edges(grid_dataset.lines)
 
 
 def _round_to_hour(value: datetime) -> datetime:
@@ -1255,70 +1338,131 @@ def _delta_improvement(
     return float(delta.improvement) if delta is not None else 0.0
 
 
-def _get_bus(bus_id: str) -> dict[str, float | str]:
-    return _BUS_METADATA.get(
-        bus_id,
-        {"name": bus_id, "latitude": 36.3504, "longitude": 127.3845},
-    )
-
-
-def _get_candidate(candidate_id: str, index: int) -> dict[str, float | str]:
-    if candidate_id in _DEFAULT_CANDIDATES:
-        return _DEFAULT_CANDIDATES[candidate_id]
-
-    return {
-        "label": candidate_id,
-        "latitude": 36.15 + (index * 0.18),
-        "longitude": 127.55 + (index * 0.12),
-        "distance_km": 46.0 + (index * 4.0),
-        "construction_cost": 18.0 + index,
-        "congestion_relief": 26.0 - (index * 1.5),
-        "environmental_risk": 4.5 + (index * 0.6),
-        "policy_risk": 3.0 + (index * 0.4),
-    }
-
-
 def _build_candidate_records(
     simulation_input: SimulationInput,
-) -> list[tuple[str, dict[str, float | str]]]:
+    *,
+    grid_dataset: GridDataset,
+) -> tuple[list[tuple[str, dict[str, float | str]]], list[str]]:
     records: list[tuple[str, dict[str, float | str]]] = []
+    warnings: list[str] = []
+    tower_by_node_id = {
+        tower.node_id: tower
+        for tower in grid_dataset.tower_candidates
+    }
+    node_by_id = _grid_node_by_id(grid_dataset)
     for candidate_id in simulation_input.candidate_site_ids:
-        if _is_user_candidate_id(candidate_id):
+        tower = tower_by_node_id.get(candidate_id)
+        node = node_by_id.get(candidate_id)
+        if tower is None or node is None:
+            warnings.append(f"{candidate_id} 후보는 GridDataset 송전탑 후보가 아니어서 제외했습니다.")
             continue
-        records.append((candidate_id, _get_candidate(candidate_id, len(records))))
+        records.append(
+            (
+                candidate_id,
+                _candidate_from_tower_spec(
+                    tower,
+                    node=node,
+                    simulation_input=simulation_input,
+                    node_by_id=node_by_id,
+                ),
+            )
+        )
 
     for installation in simulation_input.user_candidate_points:
-        candidate_id = _user_candidate_id(installation)
-        records.append((candidate_id, _candidate_from_installation(installation, simulation_input)))
+        candidate_id = grid_node_id_for_installation(installation)
+        if candidate_id in {candidate_id for candidate_id, _ in records}:
+            continue
+        node = node_by_id.get(candidate_id)
+        if node is None:
+            warnings.append(f"{candidate_id} 사용자 후보는 GridDataset에 없어 제외했습니다.")
+            continue
+        records.append(
+            (
+                candidate_id,
+                _candidate_from_installation(
+                    installation,
+                    simulation_input,
+                    node_by_id=node_by_id,
+                ),
+            )
+        )
 
-    return records
+    return records, warnings
 
 
 def _is_user_candidate_id(candidate_id: str) -> bool:
-    return candidate_id.startswith("user:")
+    return candidate_id.startswith(("USER_TOWER_", "USER_PLANT_"))
 
 
 def _user_candidate_id(installation: InstallationPoint) -> str:
-    return f"user:{installation.installation_id}"
+    return grid_node_id_for_installation(installation)
+
+
+def _candidate_from_tower_spec(
+    tower,
+    *,
+    node: GridNode,
+    simulation_input: SimulationInput,
+    node_by_id: dict[str, GridNode],
+) -> dict[str, float | str]:
+    start_node = node_by_id[simulation_input.start_bus_id]
+    end_node = node_by_id[simulation_input.end_bus_id]
+    approach_distance = _geo_distance_km(
+        start_node.latitude,
+        start_node.longitude,
+        node.latitude,
+        node.longitude,
+    )
+    exit_distance = _geo_distance_km(
+        node.latitude,
+        node.longitude,
+        end_node.latitude,
+        end_node.longitude,
+    )
+    corridor_distance = round((approach_distance + exit_distance) * 0.58, 1)
+    voltage_relief = min(8.0, tower.voltage_kv / 90.0)
+    accessibility_bonus = (tower.accessibility_score or 0.6) * 6.0
+
+    return {
+        "label": tower.tower_name,
+        "latitude": node.latitude,
+        "longitude": node.longitude,
+        "distance_km": max(18.0, corridor_distance),
+        "construction_cost": round(
+            tower.install_cost_billion
+            if tower.install_cost_billion is not None
+            else max(10.0, corridor_distance * 0.32 + tower.voltage_kv / 130.0),
+            1,
+        ),
+        "congestion_relief": round(20.0 + voltage_relief + accessibility_bonus, 1),
+        "environmental_risk": round(tower.environment_risk * 10.0, 1),
+        "policy_risk": round(tower.policy_risk * 10.0, 1),
+        "source": tower.source,
+        "node_id": tower.node_id,
+        "tower_id": tower.tower_id,
+        "voltage_kv": tower.voltage_kv,
+    }
 
 
 def _candidate_from_installation(
     installation: InstallationPoint,
     simulation_input: SimulationInput,
+    *,
+    node_by_id: dict[str, GridNode],
 ) -> dict[str, float | str]:
-    start_bus = _get_bus(simulation_input.start_bus_id)
-    end_bus = _get_bus(simulation_input.end_bus_id)
+    start_node = node_by_id[simulation_input.start_bus_id]
+    end_node = node_by_id[simulation_input.end_bus_id]
     approach_distance = _geo_distance_km(
-        float(start_bus["latitude"]),
-        float(start_bus["longitude"]),
+        start_node.latitude,
+        start_node.longitude,
         installation.latitude,
         installation.longitude,
     )
     exit_distance = _geo_distance_km(
         installation.latitude,
         installation.longitude,
-        float(end_bus["latitude"]),
-        float(end_bus["longitude"]),
+        end_node.latitude,
+        end_node.longitude,
     )
     corridor_distance = round((approach_distance + exit_distance) * 0.58, 1)
     voltage_kv = installation.voltage_kv or 345.0
@@ -1353,14 +1497,70 @@ def _geo_distance_km(
     return (lat_delta**2 + lng_delta**2) ** 0.5
 
 
-def _to_bus_node_spec(bus_id: str) -> BusNodeSpec:
-    bus = _get_bus(bus_id)
+def _grid_node_option_label(node: GridNode) -> str:
+    type_label = "발전소" if node.node_type in {"power_plant", "user_power_plant"} else "송전탑"
+    return f"{node.node_name} ({type_label})"
+
+
+def _grid_node_by_id(dataset: GridDataset) -> dict[str, GridNode]:
+    return {
+        node.node_id: node
+        for node in dataset.nodes
+    }
+
+
+def _to_grid_bus_node_spec(
+    node_id: str,
+    node_by_id: dict[str, GridNode],
+) -> BusNodeSpec:
+    node = node_by_id.get(node_id)
+    if node is None:
+        raise ValueError(f"GridNode를 찾을 수 없습니다: {node_id}")
     return BusNodeSpec(
-        bus_id=bus_id,
-        label=str(bus["name"]),
-        latitude=float(bus["latitude"]),
-        longitude=float(bus["longitude"]),
+        bus_id=node.node_id,
+        label=node.node_name,
+        latitude=node.latitude,
+        longitude=node.longitude,
     )
+
+
+def _grid_edges_to_graph_edges(lines: list[GridLine]) -> list[GraphEdgeSpec]:
+    return [
+        GraphEdgeSpec(
+            from_node_id=line.from_node_id,
+            to_node_id=line.to_node_id,
+            distance_km=line.distance_km,
+        )
+        for line in lines
+        if line.status != "out_of_service"
+    ]
+
+
+def _select_grid_hub_bus(
+    dataset: GridDataset,
+    *,
+    start_node_id: str,
+    end_node_id: str,
+) -> BusNodeSpec | None:
+    node_by_id = _grid_node_by_id(dataset)
+    hub_node = node_by_id.get(DEFAULT_HUB_NODE_ID)
+    if hub_node is not None and hub_node.node_id not in {start_node_id, end_node_id}:
+        return _to_grid_bus_node_spec(hub_node.node_id, node_by_id)
+
+    for node in dataset.nodes:
+        if (
+            node.node_type in {"transmission_tower", "user_transmission_tower"}
+            and node.node_id not in {start_node_id, end_node_id}
+        ):
+            return _to_grid_bus_node_spec(node.node_id, node_by_id)
+    return None
+
+
+def _grid_dataset_from_monitoring(monitoring: MonitoringResult) -> GridDataset:
+    dataset = monitoring.metadata.get("grid_dataset")
+    if not isinstance(dataset, GridDataset):
+        raise ValueError("MonitoringResult에 GridDataset metadata가 없어 counterfactual을 계산할 수 없습니다.")
+    return dataset
 
 
 def _to_route_candidate_spec(

@@ -92,13 +92,13 @@ def test_save_and_load_scenario_state_round_trips_page_inputs(tmp_path):
             landing_installations=[installation],
             monitoring_load_scale=1.25,
             monitoring_data_source="DC Power Flow",
-            simulation_start_bus_id="BUS_001",
-            simulation_end_bus_id="BUS_011",
-            simulation_candidate_site_ids=["CANDIDATE_A", "CANDIDATE_B"],
+            simulation_start_bus_id="PLANT_INCHEON",
+            simulation_end_bus_id="TOWER_DAEGU",
+            simulation_candidate_site_ids=["TOWER_GUMI", "TOWER_SANGJU"],
             simulation_load_scale=1.15,
             prediction_load_scale=1.1,
             prediction_model_source="Baseline",
-            prediction_selected_bus_ids=["BUS_001", "BUS_011"],
+            prediction_selected_bus_ids=["TOWER_SEOUL", "TOWER_DAEGU"],
             prediction_retrain=False,
             prediction_epochs=20,
         ),
@@ -109,9 +109,9 @@ def test_save_and_load_scenario_state_round_trips_page_inputs(tmp_path):
 
     assert loaded.scenario.scenario_id == "full-state"
     assert loaded.page_state.monitoring_load_scale == 1.25
-    assert loaded.page_state.simulation_candidate_site_ids == ["CANDIDATE_A", "CANDIDATE_B"]
+    assert loaded.page_state.simulation_candidate_site_ids == ["TOWER_GUMI", "TOWER_SANGJU"]
     assert loaded.page_state.prediction_model_source == "Baseline"
-    assert loaded.page_state.prediction_selected_bus_ids == ["BUS_001", "BUS_011"]
+    assert loaded.page_state.prediction_selected_bus_ids == ["TOWER_SEOUL", "TOWER_DAEGU"]
     assert len(loaded.page_state.landing_installations) == 1
     assert loaded.page_state.landing_installations[0].installation_id == "tower-001"
     assert loaded.page_state.landing_installations[0].elevation_source == "not_queried"

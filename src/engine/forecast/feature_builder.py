@@ -6,7 +6,7 @@ feature_builder — ForecastFeatureVector 생성 모듈
 -------------------
 컬럼:
     timestamp      : datetime  (tz-naive, 1시간 간격)
-    bus_id         : str       (예: "BUS_001")
+    bus_id         : str       (GridNode.node_id, 예: "TOWER_SEOUL")
     load_mw        : float     (해당 노드 수요, MW)
     generation_mw  : float     (해당 노드 발전량, MW; 발전 노드 아니면 0.0)
 
@@ -19,7 +19,7 @@ ForecastFeatureVector (src/data/schemas.py)
 사용 예시
 ---------
     from src.engine.forecast.feature_builder import build_feature_vector
-    fv = build_feature_vector(load_df, target_ts=ts, bus_id="BUS_001")
+    fv = build_feature_vector(load_df, target_ts=ts, bus_id="TOWER_SEOUL")
 """
 from __future__ import annotations
 

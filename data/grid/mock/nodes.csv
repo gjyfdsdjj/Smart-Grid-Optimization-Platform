@@ -1,0 +1,19 @@
+node_id,node_name,node_type,latitude,longitude,voltage_kv,region,base_load_mw,elevation_m,coordinate_system,elevation_source,source,source_id
+PLANT_INCHEON,인천 발전소,power_plant,37.4563,126.7052,345,수도권,0,,EPSG:4326,not_queried,default_asset,incheon
+PLANT_GWANGJU,광주 발전소,power_plant,35.1595,126.8526,345,호남권,0,,EPSG:4326,not_queried,default_asset,gwangju
+PLANT_SOKCHO,속초 발전소,power_plant,38.2070,128.5918,345,강원권,0,,EPSG:4326,not_queried,default_asset,sokcho
+PLANT_BUSAN,부산 발전소,power_plant,35.1796,129.0756,345,동남권,0,,EPSG:4326,not_queried,default_asset,busan
+PLANT_ULSAN,울산 발전소,power_plant,35.5384,129.3114,345,동남권,0,,EPSG:4326,not_queried,default_asset,ulsan
+PLANT_POHANG,포항 발전소,power_plant,36.0190,129.3435,345,영남권,0,,EPSG:4326,not_queried,default_asset,pohang
+TOWER_GEOCHANG,거창 송전탑,transmission_tower,35.6867,127.9095,345,경남권,480,,EPSG:4326,not_queried,default_asset,geochang
+TOWER_SEOUL,서울 송전탑,transmission_tower,37.5665,126.9780,345,수도권,1700,,EPSG:4326,not_queried,default_asset,seoul
+TOWER_GANGNEUNG,강릉 송전탑,transmission_tower,37.7519,128.8761,345,강원권,520,,EPSG:4326,not_queried,default_asset,gangneung
+TOWER_DAEJEON,대전 송전탑,transmission_tower,36.3504,127.3845,345,충청권,850,,EPSG:4326,not_queried,default_asset,daejeon
+TOWER_CHUNCHEON,춘천 송전탑,transmission_tower,37.8813,127.7298,345,강원권,430,,EPSG:4326,not_queried,default_asset,chuncheon
+TOWER_JEJU,제주도 송전탑,transmission_tower,33.4996,126.5312,154,제주권,380,,EPSG:4326,not_queried,default_asset,jeju
+TOWER_GUMI,구미 송전탑,transmission_tower,36.1195,128.3446,345,경북권,620,,EPSG:4326,not_queried,default_asset,gumi
+TOWER_DAEGU,대구 송전탑,transmission_tower,35.8714,128.6014,345,영남권,1050,,EPSG:4326,not_queried,default_asset,daegu
+TOWER_CHANGWON,창원 송전탑,transmission_tower,35.2279,128.6811,345,경남권,780,,EPSG:4326,not_queried,default_asset,changwon
+TOWER_YEONGCHEON,영천 송전탑,transmission_tower,35.9733,128.9388,345,경북권,410,,EPSG:4326,not_queried,default_asset,yeongcheon
+TOWER_SANGJU,상주 송전탑,transmission_tower,36.4109,128.1591,345,경북권,360,,EPSG:4326,not_queried,default_asset,sangju
+TOWER_HAENAM,해남 송전탑,transmission_tower,34.5733,126.5993,345,호남권,340,,EPSG:4326,not_queried,default_asset,haenam

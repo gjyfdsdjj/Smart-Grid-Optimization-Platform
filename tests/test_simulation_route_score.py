@@ -22,8 +22,8 @@ def _route(
 ) -> RouteResult:
     return RouteResult(
         route_id=route_id,
-        start_bus_id="BUS_001",
-        end_bus_id="BUS_011",
+        start_bus_id="NODE_START",
+        end_bus_id="NODE_END",
         total_distance_km=distance_km,
         estimated_cost=distance_km * 0.5,
         source=source,
@@ -33,7 +33,7 @@ def _route(
 
 def test_calculate_score_reflects_route_and_counterfactual_impact():
     score_input = CandidateScoreInput(
-        candidate_id="SITE_TEST",
+        candidate_id="TOWER_TEST",
         candidate_label="테스트 후보",
         distance_km=40.0,
         construction_cost=12.0,
@@ -65,7 +65,7 @@ def test_calculate_score_reflects_route_and_counterfactual_impact():
 
 def test_load_scale_increases_congestion_relief_bonus():
     base_input = CandidateScoreInput(
-        candidate_id="SITE_LOAD",
+        candidate_id="TOWER_LOAD",
         candidate_label="부하 보정 후보",
         distance_km=40.0,
         construction_cost=12.0,
@@ -75,7 +75,7 @@ def test_load_scale_increases_congestion_relief_bonus():
         load_scale=1.0,
     )
     high_load_input = CandidateScoreInput(
-        candidate_id="SITE_LOAD",
+        candidate_id="TOWER_LOAD",
         candidate_label="부하 보정 후보",
         distance_km=40.0,
         construction_cost=12.0,
@@ -99,21 +99,21 @@ def test_rank_recommendations_uses_stable_tie_breaks():
     same_score = ScoreBreakdown(total_score=80.0)
     ranked = rank_recommendations([
         build_recommendation(
-            "SITE_LONG",
+            "TOWER_LONG",
             "긴 경로",
             _route("long", distance_km=60.0),
             same_score,
             "long",
         ),
         build_recommendation(
-            "SITE_SHORT",
+            "TOWER_SHORT",
             "짧은 경로",
             _route("short", distance_km=30.0),
             same_score,
             "short",
         ),
         build_recommendation(
-            "SITE_ALPHA",
+            "TOWER_ALPHA",
             "알파 경로",
             _route("alpha", distance_km=30.0),
             same_score,
@@ -122,10 +122,23 @@ def test_rank_recommendations_uses_stable_tie_breaks():
     ])
 
     assert [(item.rank, item.candidate_id) for item in ranked] == [
-        (1, "SITE_ALPHA"),
-        (2, "SITE_SHORT"),
-        (3, "SITE_LONG"),
+        (1, "TOWER_ALPHA"),
+        (2, "TOWER_SHORT"),
+        (3, "TOWER_LONG"),
     ]
+
+
+def test_simulation_options_are_grid_nodes_not_legacy_sites():
+    service = SimulationService()
+
+    bus_options = service.list_bus_options()
+    candidate_options = service.list_candidate_options()
+
+    assert bus_options
+    assert candidate_options
+    assert any(bus_id.startswith("PLANT_") for bus_id, _ in bus_options)
+    assert any(bus_id.startswith("TOWER_") for bus_id, _ in bus_options)
+    assert all(candidate_id.startswith("TOWER_") for candidate_id, _ in candidate_options)
 
 
 def test_run_simulation_recommendations_have_explainable_score_notes():
@@ -134,7 +147,11 @@ def test_run_simulation_recommendations_have_explainable_score_notes():
 
     assert result.source == "astar"
     assert result.fallback.mode == "none"
-    assert [recommendation.rank for recommendation in result.recommendations] == [1, 2, 3]
+    assert [recommendation.rank for recommendation in result.recommendations] == list(
+        range(1, len(result.recommendations) + 1)
+    )
+    assert len(result.recommendations) >= 12
+    assert all(recommendation.candidate_id.startswith("TOWER_") for recommendation in result.recommendations)
 
     for recommendation in result.recommendations:
         assert recommendation.route is not None
@@ -158,7 +175,7 @@ def test_top_recommendation_notes_reference_counterfactual_delta():
         if delta.metric_id == "peak_utilization"
     )
 
-    assert top_recommendation.candidate_id == "SITE_SOUTH"
+    assert top_recommendation.candidate_id.startswith("TOWER_")
     assert any("counterfactual 개선 근거" in note for note in top_recommendation.score.notes)
     assert any("counterfactual bonus" in note for note in top_recommendation.score.notes)
     assert f"최대 이용률을 {peak_delta.improvement:.1f}%p" in top_recommendation.rationale
@@ -191,11 +208,8 @@ def test_empty_candidate_selection_uses_service_warning_once():
 
     result = service.run_simulation(simulation_input)
 
-    assert result.simulation_input.candidate_site_ids == [
-        "SITE_NORTH",
-        "SITE_CENTRAL",
-        "SITE_SOUTH",
-    ]
+    assert len(result.simulation_input.candidate_site_ids) >= 12
+    assert all(candidate_id.startswith("TOWER_") for candidate_id in result.simulation_input.candidate_site_ids)
     assert sum("후보지가 비어" in warning for warning in result.warnings) == 1
     assert result.recommendations
 
@@ -222,12 +236,12 @@ def test_user_installation_candidate_generates_recommendation_and_route():
 
     assert result.simulation_input.candidate_site_ids == []
     assert result.simulation_input.user_candidate_points == [installation]
-    assert [item.candidate_id for item in result.recommendations] == ["user:tower-manual-001"]
+    assert [item.candidate_id for item in result.recommendations] == ["USER_TOWER_TOWER_MANUAL_001"]
     assert recommendation.candidate_label == "사용자 추가 송전탑: 수동 송전탑 후보"
     assert recommendation.route is not None
-    assert "user:tower-manual-001" in recommendation.route.path_node_ids
+    assert "USER_TOWER_TOWER_MANUAL_001" in recommendation.route.path_node_ids
     assert any(
-        point.point_id == "user:tower-manual-001"
+        point.point_id == "USER_TOWER_TOWER_MANUAL_001"
         and point.latitude == installation.latitude
         and point.longitude == installation.longitude
         for point in recommendation.route.waypoints
@@ -256,7 +270,7 @@ def test_counterfactual_deltas_improve_core_metrics_and_vary_by_candidate():
                 candidate_site_ids=[candidate_id],
             )
         )
-        for candidate_id in ["SITE_NORTH", "SITE_CENTRAL", "SITE_SOUTH"]
+        for candidate_id in ["TOWER_GUMI", "TOWER_DAEJEON", "TOWER_JEJU"]
     ]
 
     loss_after_values = set()

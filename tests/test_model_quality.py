@@ -12,7 +12,7 @@ from src.services.prediction_service import PredictionService
 pytestmark = pytest.mark.integration
 
 _RAW_DIR = str(Path(__file__).resolve().parents[1] / "data" / "raw")
-_N_BUSES = 13
+_N_NODES = 24
 _HORIZON = 24
 
 
@@ -32,7 +32,7 @@ def baseline_result() -> PredictionResult:
 
 class TestPredictionContract:
     def test_prediction_count(self, mock_result):
-        assert len(mock_result.predictions) == _HORIZON * _N_BUSES
+        assert len(mock_result.predictions) == _HORIZON * _N_NODES
 
     def test_no_negative_load(self, mock_result):
         for p in mock_result.predictions:
@@ -44,7 +44,7 @@ class TestPredictionContract:
 
     def test_all_buses_covered(self, mock_result):
         bus_ids = {p.bus_id for p in mock_result.predictions}
-        assert len(bus_ids) == _N_BUSES
+        assert len(bus_ids) == _N_NODES
 
     def test_risk_lines_sorted_desc(self, mock_result):
         utils = [r.predicted_utilization for r in mock_result.risk_lines]
@@ -106,22 +106,22 @@ class TestLoadScaleEffect:
 # ── 도시 규모별 부하 검증 ──────────────────────────────────────────────────────
 
 class TestCityScaleOrder:
-    def test_seoul_larger_than_gangneung(self, baseline_result):
-        """서울 평균 예측 부하는 강릉보다 커야 한다."""
+    def test_seoul_tower_larger_than_gangneung_tower(self, baseline_result):
+        """서울 송전탑 평균 예측 부하는 강릉 송전탑보다 커야 한다."""
         by_bus: dict[str, list[float]] = {}
         for p in baseline_result.predictions:
             by_bus.setdefault(p.bus_id, []).append(p.predicted_load_mw)
 
-        seoul = sum(by_bus.get("BUS_001", [0])) / max(len(by_bus.get("BUS_001", [1])), 1)
-        gangneung = sum(by_bus.get("BUS_005", [0])) / max(len(by_bus.get("BUS_005", [1])), 1)
+        seoul = sum(by_bus.get("TOWER_SEOUL", [0])) / max(len(by_bus.get("TOWER_SEOUL", [1])), 1)
+        gangneung = sum(by_bus.get("TOWER_GANGNEUNG", [0])) / max(len(by_bus.get("TOWER_GANGNEUNG", [1])), 1)
         assert seoul > gangneung, f"서울({seoul:.0f}) <= 강릉({gangneung:.0f})"
 
-    def test_busan_larger_than_jeonju(self, baseline_result):
-        """부산 평균 예측 부하는 전주보다 커야 한다."""
+    def test_daegu_tower_larger_than_haenam_tower(self, baseline_result):
+        """대구 송전탑 평균 예측 부하는 해남 송전탑보다 커야 한다."""
         by_bus: dict[str, list[float]] = {}
         for p in baseline_result.predictions:
             by_bus.setdefault(p.bus_id, []).append(p.predicted_load_mw)
 
-        busan = sum(by_bus.get("BUS_013", [0])) / max(len(by_bus.get("BUS_013", [1])), 1)
-        jeonju = sum(by_bus.get("BUS_010", [0])) / max(len(by_bus.get("BUS_010", [1])), 1)
-        assert busan > jeonju, f"부산({busan:.0f}) <= 전주({jeonju:.0f})"
+        daegu = sum(by_bus.get("TOWER_DAEGU", [0])) / max(len(by_bus.get("TOWER_DAEGU", [1])), 1)
+        haenam = sum(by_bus.get("TOWER_HAENAM", [0])) / max(len(by_bus.get("TOWER_HAENAM", [1])), 1)
+        assert daegu > haenam, f"대구({daegu:.0f}) <= 해남({haenam:.0f})"

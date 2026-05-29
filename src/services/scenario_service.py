@@ -257,8 +257,8 @@ def _page_state_from_record(record: Any) -> ScenarioPageState:
             record.get("monitoring_load_scale"), 1.0, "monitoring_load_scale"
         ),
         monitoring_data_source=str(record.get("monitoring_data_source") or "DC Power Flow"),
-        simulation_start_bus_id=str(record.get("simulation_start_bus_id") or "BUS_001"),
-        simulation_end_bus_id=str(record.get("simulation_end_bus_id") or "BUS_011"),
+        simulation_start_bus_id=str(record.get("simulation_start_bus_id") or "PLANT_INCHEON"),
+        simulation_end_bus_id=str(record.get("simulation_end_bus_id") or "TOWER_DAEGU"),
         simulation_candidate_site_ids=_str_list(
             record.get("simulation_candidate_site_ids"),
             "simulation_candidate_site_ids",

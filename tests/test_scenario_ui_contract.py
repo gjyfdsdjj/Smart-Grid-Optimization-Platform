@@ -134,22 +134,22 @@ def test_collect_current_page_state_reads_core_input_keys():
         LANDING_INSTALLATIONS_KEY: [installation],
         MONITORING_LOAD_SCALE_KEY: 1.2,
         MONITORING_DATA_SOURCE_KEY: "DC Power Flow",
-        SIMULATION_START_BUS_KEY: "BUS_001",
-        SIMULATION_END_BUS_KEY: "BUS_011",
-        SIMULATION_CANDIDATES_KEY: ["CANDIDATE_A"],
+        SIMULATION_START_BUS_KEY: "PLANT_INCHEON",
+        SIMULATION_END_BUS_KEY: "TOWER_DAEGU",
+        SIMULATION_CANDIDATES_KEY: ["TOWER_GUMI"],
         SIMULATION_LOAD_SCALE_KEY: 1.15,
         PREDICTION_LOAD_SCALE_KEY: 1.1,
         PREDICTION_MODEL_SOURCE_KEY: "Baseline",
-        PREDICTION_SELECTED_BUS_IDS_KEY: ["BUS_001", "BUS_013"],
+        PREDICTION_SELECTED_BUS_IDS_KEY: ["TOWER_SEOUL", "TOWER_DAEGU"],
     }
 
     page_state = collect_current_page_state(state)
 
     assert page_state.landing_installations == [installation]
     assert page_state.monitoring_load_scale == 1.2
-    assert page_state.simulation_candidate_site_ids == ["CANDIDATE_A"]
+    assert page_state.simulation_candidate_site_ids == ["TOWER_GUMI"]
     assert page_state.prediction_model_source == "Baseline"
-    assert page_state.prediction_selected_bus_ids == ["BUS_001", "BUS_013"]
+    assert page_state.prediction_selected_bus_ids == ["TOWER_SEOUL", "TOWER_DAEGU"]
 
 
 def test_apply_saved_page_state_restores_inputs_and_clears_results():
@@ -162,25 +162,25 @@ def test_apply_saved_page_state_restores_inputs_and_clears_results():
     page_state = ScenarioPageState(
         monitoring_load_scale=1.3,
         monitoring_data_source="mock",
-        simulation_start_bus_id="BUS_002",
-        simulation_end_bus_id="BUS_012",
-        simulation_candidate_site_ids=["CANDIDATE_B"],
+        simulation_start_bus_id="PLANT_GWANGJU",
+        simulation_end_bus_id="TOWER_CHANGWON",
+        simulation_candidate_site_ids=["TOWER_SANGJU"],
         simulation_load_scale=1.2,
         prediction_load_scale=1.15,
         prediction_model_source="GNN",
-        prediction_selected_bus_ids=["BUS_002"],
+        prediction_selected_bus_ids=["TOWER_GANGNEUNG"],
     )
 
     apply_saved_page_state(page_state, state=state)
 
     assert state[MONITORING_LOAD_SCALE_KEY] == 1.3
     assert state[MONITORING_DATA_SOURCE_KEY] == "mock"
-    assert state[SIMULATION_START_BUS_KEY] == "BUS_002"
-    assert state[SIMULATION_END_BUS_KEY] == "BUS_012"
-    assert state[SIMULATION_CANDIDATES_KEY] == ["CANDIDATE_B"]
-    assert state["selected_candidates"] == ["CANDIDATE_B"]
+    assert state[SIMULATION_START_BUS_KEY] == "PLANT_GWANGJU"
+    assert state[SIMULATION_END_BUS_KEY] == "TOWER_CHANGWON"
+    assert state[SIMULATION_CANDIDATES_KEY] == ["TOWER_SANGJU"]
+    assert state["selected_candidates"] == ["TOWER_SANGJU"]
     assert state[PREDICTION_MODEL_SOURCE_KEY] == "GNN"
-    assert state[PREDICTION_SELECTED_BUS_IDS_KEY] == ["BUS_002"]
+    assert state[PREDICTION_SELECTED_BUS_IDS_KEY] == ["TOWER_GANGNEUNG"]
     assert "sgop_monitoring_result" not in state
     assert "sim_result" not in state
     assert "pred_result" not in state

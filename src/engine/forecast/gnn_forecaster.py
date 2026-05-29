@@ -12,26 +12,6 @@ from src.data.schemas import ForecastFeatureVector, HourlyLoadPrediction
 LOOKBACK_H = 24
 HORIZON_H = 24
 
-_GRAPH_EDGE_DEFS: list[tuple[str, str]] = [
-    ("BUS_001", "BUS_002"),
-    ("BUS_001", "BUS_003"),
-    ("BUS_001", "BUS_004"),
-    ("BUS_001", "BUS_007"),
-    ("BUS_002", "BUS_003"),
-    ("BUS_004", "BUS_005"),
-    ("BUS_004", "BUS_006"),
-    ("BUS_006", "BUS_007"),
-    ("BUS_007", "BUS_008"),
-    ("BUS_007", "BUS_009"),
-    ("BUS_008", "BUS_010"),
-    ("BUS_009", "BUS_010"),
-    ("BUS_010", "BUS_011"),
-    ("BUS_011", "BUS_012"),
-    ("BUS_011", "BUS_013"),
-    ("BUS_012", "BUS_013"),
-    ("BUS_007", "BUS_011"),
-]
-
 
 def _group_target_features(
     target_features: list[ForecastFeatureVector],
@@ -49,7 +29,7 @@ def _build_neighbor_map(
     bus_ids: list[str],
     graph_edges: list[tuple[str, str]] | None = None,
 ) -> dict[str, list[str]]:
-    resolved_edges = graph_edges or _GRAPH_EDGE_DEFS
+    resolved_edges = graph_edges or []
     neighbor_map = {bus_id: set() for bus_id in bus_ids}
     for from_bus, to_bus in resolved_edges:
         if from_bus in neighbor_map and to_bus in neighbor_map:
@@ -74,7 +54,7 @@ def _build_neighbor_map(
 
 
 class GNNForecaster:
-    """인접 버스 메시지 패싱 기반 최소 GNN 예측기."""
+    """인접 Grid 노드 메시지 패싱 기반 최소 GNN 예측기."""
 
     def fit(
         self,

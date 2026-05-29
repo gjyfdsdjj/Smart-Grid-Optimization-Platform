@@ -10,7 +10,7 @@ from src.data.schemas import HourlyLoadPrediction, ScenarioContext
 
 def build_load_df(
     *,
-    bus_ids: tuple[str, ...] = ("BUS_001", "BUS_002"),
+    bus_ids: tuple[str, ...] = ("NODE_A", "NODE_B"),
     hours: int = 96,
     start: datetime = datetime(2026, 1, 1, 0, 0),
     include_temperature: bool = True,
@@ -56,7 +56,7 @@ def load_df_2bus() -> pd.DataFrame:
 
 @pytest.fixture
 def load_df_13bus() -> pd.DataFrame:
-    bus_ids = tuple(f"BUS_{index:03d}" for index in range(1, 14))
+    bus_ids = tuple(f"NODE_{index:03d}" for index in range(1, 14))
     return build_load_df(bus_ids=bus_ids)
 
 

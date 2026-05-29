@@ -76,8 +76,8 @@ def collect_current_page_state(
         monitoring_data_source=str(
             session_state.get(MONITORING_DATA_SOURCE_KEY) or "DC Power Flow"
         ),
-        simulation_start_bus_id=str(session_state.get(SIMULATION_START_BUS_KEY) or "BUS_001"),
-        simulation_end_bus_id=str(session_state.get(SIMULATION_END_BUS_KEY) or "BUS_011"),
+        simulation_start_bus_id=str(session_state.get(SIMULATION_START_BUS_KEY) or "PLANT_INCHEON"),
+        simulation_end_bus_id=str(session_state.get(SIMULATION_END_BUS_KEY) or "TOWER_DAEGU"),
         simulation_candidate_site_ids=_str_list_from_state(
             session_state.get(
                 SIMULATION_CANDIDATES_KEY,
