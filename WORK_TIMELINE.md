@@ -1966,3 +1966,13 @@
   - `git check-ignore -v data/processed/grid_line_flow_history.csv data/processed/grid_node_load_history.csv` -> 대용량 CSV ignore 적용 확인
   - `git diff --check -- README.md WORK_TIMELINE.md` -> 통과
 - 다음 작업: README 문구와 발표 자료 문구가 충돌하지 않는지 발표 직전 최종 확인한다.
+
+### 2026-05-29 README 실제 데이터 기반 확장성 문구 추가
+- 작업: README의 라이브 데모 설명 하단에 실제 송전망 원장 데이터, 선로별 실측 조류, 운영 제약 조건 확보 시 실제 데이터 기반 브리핑 도구로 확장 가능하다는 문구를 추가했다.
+- 수정 파일: `README.md`, `WORK_TIMELINE.md`
+- 유기적 동작:
+  - 현재 GridNode/GridLine/Scenario 계약과 데이터 어댑터 구조를 유지한 확장 가능성을 명시했다.
+  - 실제 운영 시스템 대체가 아니라 정책 브리핑, 시나리오 비교, 투자 검토 초기 단계의 의사결정 지원 도구라는 한계를 함께 적었다.
+- 검증:
+  - `git diff --check -- README.md WORK_TIMELINE.md` -> 통과
+- 다음 작업: 발표 자료에서도 같은 수준의 표현으로 과장 없이 설명한다.
