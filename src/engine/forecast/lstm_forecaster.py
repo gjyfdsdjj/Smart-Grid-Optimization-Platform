@@ -17,6 +17,7 @@ lstm_forecaster — LSTM 기반 24시간 부하 예측
 """
 from __future__ import annotations
 
+import json
 import pickle
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -29,6 +30,8 @@ from src.data.schemas import ForecastFeatureVector, HourlyLoadPrediction
 _MODEL_DIR = Path(__file__).resolve().parents[3] / "models" / "lstm"
 _MODEL_PATH = _MODEL_DIR / "model.keras"
 _SCALER_PATH = _MODEL_DIR / "scalers.pkl"
+_HISTORY_PATH = _MODEL_DIR / "training_history.csv"
+_EVALUATION_PATH = _MODEL_DIR / "evaluation_summary.json"
 
 LOOKBACK_H = 24
 HORIZON_H = 24
@@ -187,7 +190,7 @@ class LSTMForecaster:
             tf.keras.layers.Dense(HORIZON_H),
         ])
         model.compile(optimizer="adam", loss="mse", metrics=["mae"])
-        model.fit(
+        history = model.fit(
             X_train, y_train,
             epochs=epochs,
             batch_size=batch_size,
@@ -226,6 +229,8 @@ class LSTMForecaster:
             print("=" * 45)
 
         _MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        history_rows = _training_history_rows(history.history, model)
+        pd.DataFrame(history_rows).to_csv(_HISTORY_PATH, index=False)
         model.save(_MODEL_PATH)
         with open(_SCALER_PATH, "wb") as f:
             pickle.dump({"scalers": scalers, "bus_ids": bus_ids, "temp_scaler": temp_scaler}, f)
@@ -234,6 +239,7 @@ class LSTMForecaster:
         self._scalers = scalers
         self._bus_ids = bus_ids
         self._temp_scaler = temp_scaler
+        self._training_history = history_rows
         return self
 
     def predict(
@@ -337,6 +343,49 @@ class LSTMForecaster:
     def is_trained(self) -> bool:
         return _MODEL_PATH.exists() and _SCALER_PATH.exists()
 
+    def training_history(self) -> list[dict[str, float | int]]:
+        if hasattr(self, "_training_history"):
+            return list(self._training_history)
+        if _HISTORY_PATH.exists():
+            return pd.read_csv(_HISTORY_PATH).to_dict("records")
+        return []
+
+    def training_metadata(self) -> dict[str, object]:
+        metadata: dict[str, object] = {
+            "model_type": "lstm",
+            "framework": "tensorflow",
+            "deep_learning": True,
+            "lookback_h": LOOKBACK_H,
+            "horizon_h": HORIZON_H,
+            "feature_dim": FEATURE_DIM,
+            "model_path": _portable_path(_MODEL_PATH),
+            "scaler_path": _portable_path(_SCALER_PATH),
+            "training_history_path": _portable_path(_HISTORY_PATH),
+        }
+        history = self.training_history()
+        if history:
+            metadata["epochs_trained"] = len(history)
+            metadata["train_loss_final"] = history[-1].get("loss")
+            val_losses = [
+                float(row["val_loss"])
+                for row in history
+                if row.get("val_loss") is not None and not pd.isna(row.get("val_loss"))
+            ]
+            if val_losses:
+                metadata["val_loss_best"] = min(val_losses)
+        if _EVALUATION_PATH.exists():
+            evaluation = json.loads(_EVALUATION_PATH.read_text(encoding="utf-8"))
+            metadata.update(
+                {
+                    "evaluation_summary_path": _portable_path(_EVALUATION_PATH),
+                    "test_mae": evaluation.get("mae_mw"),
+                    "test_rmse": evaluation.get("rmse_mw"),
+                    "test_mape": evaluation.get("mape_pct"),
+                    "evaluation_summary": evaluation,
+                }
+            )
+        return metadata
+
     def _load_if_needed(self) -> None:
         if hasattr(self, "_model"):
             return
@@ -349,3 +398,41 @@ class LSTMForecaster:
         self._scalers = data["scalers"]
         self._bus_ids = data["bus_ids"]
         self._temp_scaler = data.get("temp_scaler")
+        self._training_history = self.training_history()
+
+
+def _training_history_rows(
+    history: dict[str, list[float]],
+    model: object,
+) -> list[dict[str, float | int]]:
+    loss_values = history.get("loss", [])
+    rows: list[dict[str, float | int]] = []
+    learning_rate = _model_learning_rate(model)
+    for index, loss in enumerate(loss_values):
+        row: dict[str, float | int] = {
+            "epoch": index + 1,
+            "loss": float(loss),
+            "learning_rate": learning_rate,
+        }
+        for key in ("mae", "val_loss", "val_mae"):
+            values = history.get(key)
+            if values is not None and index < len(values):
+                row[key] = float(values[index])
+        rows.append(row)
+    return rows
+
+
+def _model_learning_rate(model: object) -> float:
+    try:
+        import tensorflow as tf
+
+        return float(tf.keras.backend.get_value(model.optimizer.learning_rate))
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _portable_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        return str(path)

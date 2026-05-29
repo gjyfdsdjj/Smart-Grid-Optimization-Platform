@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -27,6 +28,10 @@ from src.data.schemas import (
 
 
 DEFAULT_GRID_CSV_DIR = Path(__file__).resolve().parents[2] / "data" / "grid" / "enhanced"
+DEFAULT_PROCESSED_DIR = Path(__file__).resolve().parents[2] / "data" / "processed"
+DEFAULT_GRID_NODE_LOAD_HISTORY_PATH = DEFAULT_PROCESSED_DIR / "grid_node_load_history.csv"
+DEFAULT_GRID_LINE_FLOW_HISTORY_PATH = DEFAULT_PROCESSED_DIR / "grid_line_flow_history.csv"
+DEFAULT_MODEL_EVALUATION_SUMMARY_PATH = DEFAULT_PROCESSED_DIR / "model_evaluation_summary.csv"
 
 _NODES_COLUMNS = [
     "node_id",
@@ -87,6 +92,52 @@ _TOWER_COLUMNS = [
     "accessibility_score",
     "nearest_node_id",
     "source",
+]
+_GRID_NODE_LOAD_HISTORY_COLUMNS = [
+    "timestamp",
+    "node_id",
+    "node_name",
+    "node_type",
+    "region",
+    "load_mw",
+    "generation_mw",
+    "net_injection_mw",
+    "load_weight",
+    "generation_weight",
+    "national_demand_mw",
+    "national_supply_mw",
+    "grid_total_load_mw",
+    "grid_total_generation_mw",
+    "scale_to_grid",
+    "source",
+]
+_GRID_LINE_FLOW_HISTORY_COLUMNS = [
+    "timestamp",
+    "line_id",
+    "from_node_id",
+    "to_node_id",
+    "from_node_name",
+    "to_node_name",
+    "flow_mw",
+    "abs_flow_mw",
+    "capacity_mw",
+    "utilization",
+    "status",
+    "risk_level",
+    "loss_mw",
+    "from_angle_deg",
+    "to_angle_deg",
+    "angle_delta_deg",
+    "slack_bus_id",
+    "reactance_pu",
+    "line_status_source",
+    "source",
+]
+_MODEL_EVALUATION_REQUIRED_COLUMNS = [
+    "model",
+    "mae_mw",
+    "rmse_mw",
+    "mape_pct",
 ]
 
 
@@ -230,6 +281,69 @@ def load_grid_dataset_or_default(
     )
 
 
+def load_processed_grid_node_history(
+    path: str | Path = DEFAULT_GRID_NODE_LOAD_HISTORY_PATH,
+    *,
+    min_timestamps: int = 24,
+) -> pd.DataFrame:
+    """공식 processed GridNode 부하 이력을 읽고 Prediction 입력 계약으로 검증한다."""
+
+    resolved_path = Path(path)
+    _ensure_file_exists(resolved_path)
+    df = _load_processed_grid_node_history_cached(
+        str(resolved_path.resolve()),
+        resolved_path.stat().st_mtime_ns,
+        int(min_timestamps),
+    ).copy()
+    df.attrs["source_path"] = _portable_path(resolved_path)
+    return df
+
+
+def load_processed_grid_line_flow_history(
+    path: str | Path = DEFAULT_GRID_LINE_FLOW_HISTORY_PATH,
+) -> pd.DataFrame:
+    """공식 processed GridLine DC Power Flow 라벨을 읽고 검증한다."""
+
+    resolved_path = Path(path)
+    _ensure_file_exists(resolved_path)
+    df = _load_processed_grid_line_flow_history_cached(
+        str(resolved_path.resolve()),
+        resolved_path.stat().st_mtime_ns,
+    ).copy()
+    df.attrs["source_path"] = _portable_path(resolved_path)
+    return df
+
+
+def summarize_processed_grid_line_flow_history(
+    path: str | Path = DEFAULT_GRID_LINE_FLOW_HISTORY_PATH,
+) -> dict[str, object]:
+    """Prediction metadata에 쓸 GridLine 라벨 파일 요약을 반환한다."""
+
+    resolved_path = Path(path)
+    _ensure_file_exists(resolved_path)
+    return dict(
+        _summarize_processed_grid_line_flow_history_cached(
+            str(resolved_path.resolve()),
+            resolved_path.stat().st_mtime_ns,
+        )
+    )
+
+
+def load_model_evaluation_summary(
+    path: str | Path = DEFAULT_MODEL_EVALUATION_SUMMARY_PATH,
+) -> pd.DataFrame:
+    """모델별 holdout 평가 요약 CSV를 읽고 핵심 비교 컬럼을 검증한다."""
+
+    resolved_path = Path(path)
+    _ensure_file_exists(resolved_path)
+    df = _load_model_evaluation_summary_cached(
+        str(resolved_path.resolve()),
+        resolved_path.stat().st_mtime_ns,
+    ).copy()
+    df.attrs["source_path"] = _portable_path(resolved_path)
+    return df
+
+
 def _read_csv(path: Path, expected_columns: list[str]) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"{path} 파일이 없습니다.")
@@ -240,6 +354,208 @@ def _read_csv(path: Path, expected_columns: list[str]) -> pd.DataFrame:
             f"expected={expected_columns}, actual={list(df.columns)}"
         )
     return df
+
+
+@lru_cache(maxsize=4)
+def _load_processed_grid_node_history_cached(
+    path: str,
+    mtime_ns: int,
+    min_timestamps: int,
+) -> pd.DataFrame:
+    del mtime_ns
+    df = pd.read_csv(path)
+    _validate_processed_grid_node_history(df, min_timestamps=min_timestamps)
+    return df
+
+
+@lru_cache(maxsize=2)
+def _load_processed_grid_line_flow_history_cached(
+    path: str,
+    mtime_ns: int,
+) -> pd.DataFrame:
+    del mtime_ns
+    df = pd.read_csv(path)
+    _validate_processed_grid_line_flow_history(df)
+    return df
+
+
+@lru_cache(maxsize=4)
+def _summarize_processed_grid_line_flow_history_cached(
+    path: str,
+    mtime_ns: int,
+) -> tuple[tuple[str, object], ...]:
+    del mtime_ns
+    df = pd.read_csv(
+        path,
+        usecols=["timestamp", "line_id", "utilization", "status", "risk_level", "source"],
+    )
+    if df.empty:
+        raise ValueError("processed GridLine flow history가 비어 있습니다.")
+    missing = {
+        "timestamp",
+        "line_id",
+        "utilization",
+        "status",
+        "risk_level",
+        "source",
+    } - set(df.columns)
+    if missing:
+        raise ValueError(f"processed GridLine flow history 컬럼이 부족합니다: {sorted(missing)}")
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["utilization"] = pd.to_numeric(df["utilization"], errors="coerce")
+    if df["timestamp"].isna().any() or df["utilization"].isna().any():
+        raise ValueError("processed GridLine flow history 요약 중 timestamp/utilization 파싱에 실패했습니다.")
+
+    summary = {
+        "line_label_source": _portable_path(Path(path)),
+        "processed_line_history_used": True,
+        "processed_line_history_role": "dc_power_flow_evaluation_label",
+        "line_flow_history_rows": int(len(df)),
+        "line_flow_history_timestamp_count": int(df["timestamp"].nunique()),
+        "line_flow_history_line_count": int(df["line_id"].nunique()),
+        "line_flow_history_start": df["timestamp"].min().isoformat(),
+        "line_flow_history_end": df["timestamp"].max().isoformat(),
+        "line_flow_history_max_utilization": round(float(df["utilization"].max()), 6),
+        "line_flow_history_status_counts": {
+            str(key): int(value)
+            for key, value in df["status"].value_counts().to_dict().items()
+        },
+        "line_flow_history_risk_counts": {
+            str(key): int(value)
+            for key, value in df["risk_level"].value_counts().to_dict().items()
+        },
+        "line_flow_history_generation_dispatch": "grid_total_load_mw x generation_weight",
+        "line_flow_history_source": str(df["source"].dropna().iloc[0]),
+    }
+    return tuple(summary.items())
+
+
+@lru_cache(maxsize=4)
+def _load_model_evaluation_summary_cached(
+    path: str,
+    mtime_ns: int,
+) -> pd.DataFrame:
+    del mtime_ns
+    df = pd.read_csv(path)
+    _validate_model_evaluation_summary(df)
+    return df
+
+
+def _validate_processed_grid_node_history(
+    df: pd.DataFrame,
+    *,
+    min_timestamps: int,
+) -> None:
+    if df.empty:
+        raise ValueError("processed GridNode load history가 비어 있습니다.")
+    _validate_columns(
+        df,
+        _GRID_NODE_LOAD_HISTORY_COLUMNS,
+        "processed GridNode load history",
+    )
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    if df["timestamp"].isna().any():
+        raise ValueError("processed GridNode load history timestamp에 결측값이 있습니다.")
+    if df[["timestamp", "node_id"]].duplicated().any():
+        raise ValueError("processed GridNode load history timestamp/node_id 조합이 중복되었습니다.")
+    if df["timestamp"].nunique() < int(min_timestamps):
+        raise ValueError(
+            f"processed GridNode load history는 최소 {min_timestamps}개 timestamp가 필요합니다."
+        )
+    if df["node_id"].isna().any() or (df["node_id"].astype(str).str.strip() == "").any():
+        raise ValueError("processed GridNode load history node_id에 빈 값이 있습니다.")
+
+    for column in (
+        "load_mw",
+        "generation_mw",
+        "net_injection_mw",
+        "load_weight",
+        "generation_weight",
+    ):
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+        if df[column].isna().any():
+            raise ValueError(f"processed GridNode load history {column}에 숫자가 아닌 값이 있습니다.")
+    if (df["load_mw"] < 0.0).any() or (df["generation_mw"] < 0.0).any():
+        raise ValueError("processed GridNode load history load/generation은 음수일 수 없습니다.")
+
+
+def _validate_processed_grid_line_flow_history(df: pd.DataFrame) -> None:
+    if df.empty:
+        raise ValueError("processed GridLine flow history가 비어 있습니다.")
+    _validate_columns(
+        df,
+        _GRID_LINE_FLOW_HISTORY_COLUMNS,
+        "processed GridLine flow history",
+    )
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    if df["timestamp"].isna().any():
+        raise ValueError("processed GridLine flow history timestamp에 결측값이 있습니다.")
+    if df[["timestamp", "line_id"]].duplicated().any():
+        raise ValueError("processed GridLine flow history timestamp/line_id 조합이 중복되었습니다.")
+    if df["line_id"].isna().any() or (df["line_id"].astype(str).str.strip() == "").any():
+        raise ValueError("processed GridLine flow history line_id에 빈 값이 있습니다.")
+
+    for column in ("flow_mw", "abs_flow_mw", "capacity_mw", "utilization", "loss_mw"):
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+        if df[column].isna().any():
+            raise ValueError(f"processed GridLine flow history {column}에 숫자가 아닌 값이 있습니다.")
+    if (df["capacity_mw"] <= 0.0).any():
+        raise ValueError("processed GridLine flow history capacity_mw는 0보다 커야 합니다.")
+    if (df["utilization"] < 0.0).any():
+        raise ValueError("processed GridLine flow history utilization은 음수일 수 없습니다.")
+
+
+def _validate_model_evaluation_summary(df: pd.DataFrame) -> None:
+    if df.empty:
+        raise ValueError("model evaluation summary가 비어 있습니다.")
+    missing = set(_MODEL_EVALUATION_REQUIRED_COLUMNS) - set(df.columns)
+    if missing:
+        raise ValueError(f"model evaluation summary 컬럼이 부족합니다: {sorted(missing)}")
+    if df["model"].isna().any() or (df["model"].astype(str).str.strip() == "").any():
+        raise ValueError("model evaluation summary model에 빈 값이 있습니다.")
+    if df["model"].astype(str).duplicated().any():
+        raise ValueError("model evaluation summary model 값이 중복되었습니다.")
+
+    for column in (
+        "mae_mw",
+        "rmse_mw",
+        "mape_pct",
+        "line_utilization_mae_pp",
+        "line_utilization_rmse_pp",
+        "sample_count",
+        "line_sample_count",
+        "forecast_start_count",
+    ):
+        if column not in df.columns:
+            continue
+        numeric = pd.to_numeric(df[column], errors="coerce")
+        if numeric.isna().any():
+            raise ValueError(f"model evaluation summary {column}에 숫자가 아닌 값이 있습니다.")
+        if (numeric < 0.0).any():
+            raise ValueError(f"model evaluation summary {column}은 음수일 수 없습니다.")
+
+
+def _validate_columns(
+    df: pd.DataFrame,
+    expected_columns: list[str],
+    label: str,
+) -> None:
+    if list(df.columns) != expected_columns:
+        raise ValueError(
+            f"{label} 헤더가 계약과 다릅니다. expected={expected_columns}, actual={list(df.columns)}"
+        )
+
+
+def _ensure_file_exists(path: Path) -> None:
+    if not path.exists():
+        raise FileNotFoundError(f"{path} 파일이 없습니다.")
+
+
+def _portable_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        return str(path)
 
 
 def _parse_nodes(df: pd.DataFrame) -> list[GridNode]:

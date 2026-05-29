@@ -8,7 +8,12 @@ import numpy as np
 import pandas as pd
 
 from src.data.grid_builder import DEFAULT_GRID_TOTAL_LOAD_MW
-from src.data.loaders import DEFAULT_GRID_CSV_DIR, load_grid_dataset_or_default
+from src.data.loaders import (
+    DEFAULT_GRID_CSV_DIR,
+    load_grid_dataset_or_default,
+    load_processed_grid_node_history,
+    summarize_processed_grid_line_flow_history,
+)
 from src.data.schemas import (
     GridDataset,
     GridNode,
@@ -174,10 +179,7 @@ class PredictionService:
             source="baseline",
             warnings=[],
             grid_dataset=dataset,
-            metadata={
-                "history_source": "KPX CSV redistributed to GridNode",
-                "legacy_bus_source": False,
-            },
+            metadata=self._prediction_data_metadata(load_df),
         )
 
     def run_lstm_prediction(
@@ -265,11 +267,13 @@ class PredictionService:
             source="lstm",
             warnings=warnings,
             grid_dataset=dataset,
-            metadata={
-                "history_source": "KPX CSV redistributed to GridNode",
-                "legacy_bus_source": False,
-                "requires_lstm_retrain_for_grid_nodes": retrain,
-            },
+            metadata=self._prediction_data_metadata(
+                load_df,
+                extra={
+                    **self._lstm_artifact_metadata(),
+                    "requires_lstm_retrain_for_grid_nodes": retrain,
+                },
+            ),
         )
 
     def run_gnn_prediction(
@@ -313,11 +317,10 @@ class PredictionService:
             source="gnn",
             warnings=[],
             grid_dataset=dataset,
-            metadata={
-                "history_source": "KPX CSV redistributed to GridNode",
-                "graph_edge_source": "GridLine",
-                "legacy_bus_source": False,
-            },
+            metadata=self._prediction_data_metadata(
+                load_df,
+                extra={"graph_edge_source": "GridLine"},
+            ),
         )
 
     def run_neural_gnn_prediction(
@@ -397,15 +400,16 @@ class PredictionService:
             source="neural_gnn",
             warnings=[],
             grid_dataset=dataset,
-            metadata={
-                "history_source": "KPX CSV redistributed to GridNode",
-                "graph_edge_source": "GridLine",
-                "legacy_bus_source": False,
-                "model_type": "neural_gnn",
-                "deep_learning": True,
-                "framework": "torch",
-                **neural_metadata,
-            },
+            metadata=self._prediction_data_metadata(
+                load_df,
+                extra={
+                    "graph_edge_source": "GridLine",
+                    "model_type": "neural_gnn",
+                    "deep_learning": True,
+                    "framework": "torch",
+                    **neural_metadata,
+                },
+            ),
         )
 
     def run_hybrid_prediction(
@@ -484,11 +488,13 @@ class PredictionService:
                 source="hybrid",
                 warnings=warnings,
                 grid_dataset=dataset,
-                metadata={
-                    "history_source": "KPX CSV redistributed to GridNode",
-                    "graph_edge_source": "GridLine",
-                    "legacy_bus_source": False,
-                },
+                metadata=self._prediction_data_metadata(
+                    load_df,
+                    extra={
+                        "graph_edge_source": "GridLine",
+                        **self._lstm_artifact_metadata(prefix="lstm_"),
+                    },
+                ),
             )
 
         baseline_result = self.run_baseline_prediction(
@@ -599,24 +605,26 @@ class PredictionService:
                 source="hybrid_neural_gnn",
                 warnings=warnings,
                 grid_dataset=dataset,
-                metadata={
-                    "history_source": "KPX CSV redistributed to GridNode",
-                    "graph_edge_source": "GridLine",
-                    "legacy_bus_source": False,
-                    "model_type": "lstm_neural_gnn_hybrid",
-                    "deep_learning": True,
-                    "framework": "tensorflow+torch",
-                    "hybrid_primary": "lstm",
-                    "hybrid_secondary": "neural_gnn",
-                    "hybrid_primary_weight": 0.65,
-                    "hybrid_secondary_weight": 0.35,
-                    "training_history": neural_metadata.get("training_history", []),
-                    **{
-                        f"neural_gnn_{key}": value
-                        for key, value in neural_metadata.items()
-                        if key != "training_history"
+                metadata=self._prediction_data_metadata(
+                    load_df,
+                    extra={
+                        "graph_edge_source": "GridLine",
+                        "model_type": "lstm_neural_gnn_hybrid",
+                        "deep_learning": True,
+                        "framework": "tensorflow+torch",
+                        "hybrid_primary": "lstm",
+                        "hybrid_secondary": "neural_gnn",
+                        "hybrid_primary_weight": 0.65,
+                        "hybrid_secondary_weight": 0.35,
+                        **self._lstm_artifact_metadata(prefix="lstm_"),
+                        "training_history": neural_metadata.get("training_history", []),
+                        **{
+                            f"neural_gnn_{key}": value
+                            for key, value in neural_metadata.items()
+                            if key != "training_history"
+                        },
                     },
-                },
+                ),
             )
 
         baseline_result = self.run_baseline_prediction(
@@ -672,8 +680,14 @@ class PredictionService:
             node
             for node in dataset.nodes
             if (
-                max(0.0, node.base_load_mw) > 0.0
-                or profile_by_node_id.get(node.node_id, GridPowerProfile(node.node_id)).load_mw > 0.0
+                node.node_type != "user_transmission_tower"
+                and (
+                    max(0.0, node.base_load_mw) > 0.0
+                    or profile_by_node_id.get(
+                        node.node_id,
+                        GridPowerProfile(node.node_id),
+                    ).load_mw > 0.0
+                )
             )
         ]
         if load_nodes:
@@ -699,8 +713,88 @@ class PredictionService:
     ) -> pd.DataFrame:
         from src.data.adapters.public_data_adapter import load_kpx_national_hourly
 
+        processed_error = ""
+        try:
+            processed_history = load_processed_grid_node_history()
+            return self._processed_node_history_to_prediction_load_df(
+                processed_history,
+                dataset,
+            )
+        except Exception as exc:  # noqa: BLE001
+            processed_error = _summarize_prediction_error(exc)
+
         national_df = load_kpx_national_hourly(raw_dir)
-        return self._redistribute_kpx_history_to_grid(national_df, dataset)
+        history = self._redistribute_kpx_history_to_grid(national_df, dataset)
+        history.attrs.update(
+            {
+                "history_source": "KPX CSV redistributed to GridNode",
+                "processed_node_history_used": False,
+                "processed_node_history_error": processed_error,
+                "node_history_source": raw_dir,
+                "bus_id_field_semantics": "GridNode.node_id",
+            }
+        )
+        return history
+
+    def _processed_node_history_to_prediction_load_df(
+        self,
+        processed_history: pd.DataFrame,
+        dataset: GridDataset,
+    ) -> pd.DataFrame:
+        history = processed_history.copy()
+        history["timestamp"] = pd.to_datetime(history["timestamp"])
+        prediction_nodes = self._prediction_nodes(dataset)
+        prediction_node_ids = [node.node_id for node in prediction_nodes]
+        available_node_ids = set(history["node_id"].astype(str))
+        missing_node_ids = sorted(set(prediction_node_ids) - available_node_ids)
+        if missing_node_ids:
+            raise ValueError(
+                "processed GridNode load history에 Prediction 대상 node_id가 없습니다: "
+                f"{missing_node_ids}"
+            )
+
+        filtered = (
+            history[history["node_id"].isin(prediction_node_ids)]
+            .sort_values(["timestamp", "node_id"])
+            .reset_index(drop=True)
+        )
+        if filtered.empty:
+            raise ValueError("processed GridNode load history에서 Prediction 대상 노드를 찾지 못했습니다.")
+
+        result = pd.DataFrame(
+            {
+                "timestamp": filtered["timestamp"],
+                "bus_id": filtered["node_id"].astype(str),
+                "bus_name": filtered["node_name"].astype(str),
+                "load_mw": pd.to_numeric(filtered["load_mw"], errors="coerce"),
+                "generation_mw": pd.to_numeric(filtered["generation_mw"], errors="coerce"),
+                "net_injection_mw": pd.to_numeric(filtered["net_injection_mw"], errors="coerce"),
+                "load_weight": pd.to_numeric(filtered["load_weight"], errors="coerce"),
+                "generation_weight": pd.to_numeric(filtered["generation_weight"], errors="coerce"),
+            }
+        )
+        if result[["load_mw", "generation_mw"]].isna().any().any():
+            raise ValueError("processed GridNode load history의 load/generation 숫자 변환에 실패했습니다.")
+
+        result.attrs.update(
+            {
+                "history_source": "data/processed/grid_node_load_history.csv",
+                "processed_node_history_used": True,
+                "node_history_source": processed_history.attrs.get(
+                    "source_path",
+                    "data/processed/grid_node_load_history.csv",
+                ),
+                "node_history_rows": int(len(filtered)),
+                "node_history_total_rows": int(len(history)),
+                "node_history_timestamp_count": int(filtered["timestamp"].nunique()),
+                "node_history_node_count": int(filtered["node_id"].nunique()),
+                "node_history_total_node_count": int(history["node_id"].nunique()),
+                "node_history_start": filtered["timestamp"].min().isoformat(),
+                "node_history_end": filtered["timestamp"].max().isoformat(),
+                "bus_id_field_semantics": "GridNode.node_id",
+            }
+        )
+        return result
 
     def _redistribute_kpx_history_to_grid(
         self,
@@ -910,6 +1004,79 @@ class PredictionService:
             metadata["grid_loader_fallback_reason"] = dataset.fallback.reason
         if extra:
             metadata.update(extra)
+        return metadata
+
+    def _prediction_data_metadata(
+        self,
+        load_df: pd.DataFrame,
+        *,
+        extra: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        metadata: dict[str, object] = {
+            "history_source": load_df.attrs.get("history_source", "unknown"),
+            "node_history_source": load_df.attrs.get("node_history_source", ""),
+            "processed_node_history_used": bool(
+                load_df.attrs.get("processed_node_history_used", False)
+            ),
+            "node_history_rows": int(load_df.attrs.get("node_history_rows", len(load_df))),
+            "node_history_timestamp_count": int(
+                load_df.attrs.get("node_history_timestamp_count", load_df["timestamp"].nunique())
+            ),
+            "node_history_node_count": int(
+                load_df.attrs.get("node_history_node_count", load_df["bus_id"].nunique())
+            ),
+            "node_history_start": str(
+                load_df.attrs.get("node_history_start", load_df["timestamp"].min())
+            ),
+            "node_history_end": str(
+                load_df.attrs.get("node_history_end", load_df["timestamp"].max())
+            ),
+            "bus_id_field_semantics": load_df.attrs.get(
+                "bus_id_field_semantics",
+                "GridNode.node_id",
+            ),
+            "legacy_bus_source": False,
+        }
+        if "node_history_total_rows" in load_df.attrs:
+            metadata["node_history_total_rows"] = int(load_df.attrs["node_history_total_rows"])
+        if "node_history_total_node_count" in load_df.attrs:
+            metadata["node_history_total_node_count"] = int(
+                load_df.attrs["node_history_total_node_count"]
+            )
+        if load_df.attrs.get("processed_node_history_error"):
+            metadata["processed_node_history_error"] = str(
+                load_df.attrs["processed_node_history_error"]
+            )
+        metadata.update(self._processed_line_label_metadata())
+        if extra:
+            metadata.update(extra)
+        return metadata
+
+    def _processed_line_label_metadata(self) -> dict[str, object]:
+        try:
+            return summarize_processed_grid_line_flow_history()
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "line_label_source": "unavailable",
+                "processed_line_history_used": False,
+                "processed_line_history_error": _summarize_prediction_error(exc),
+            }
+
+    def _lstm_artifact_metadata(self, *, prefix: str = "") -> dict[str, object]:
+        try:
+            from src.engine.forecast.lstm_forecaster import LSTMForecaster
+
+            metadata = LSTMForecaster().training_metadata()
+        except Exception as exc:  # noqa: BLE001
+            return {
+                f"{prefix}artifact_error": _summarize_prediction_error(exc),
+            }
+
+        if prefix:
+            return {
+                f"{prefix}{key}": value
+                for key, value in metadata.items()
+            }
         return metadata
 
     def _build_summary(

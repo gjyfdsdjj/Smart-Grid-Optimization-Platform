@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pandas as pd
 import pytest
 
-from src.data.loaders import load_grid_dataset_from_csv, load_grid_dataset_or_default
+from src.data.loaders import (
+    load_grid_dataset_from_csv,
+    load_grid_dataset_or_default,
+    load_model_evaluation_summary,
+    load_processed_grid_line_flow_history,
+    load_processed_grid_node_history,
+    summarize_processed_grid_line_flow_history,
+)
 from src.data.schemas import InstallationPoint
 
 
@@ -102,3 +110,105 @@ def test_grid_csv_loader_rejects_invalid_line_reference(tmp_path):
 
     with pytest.raises(ValueError, match="존재하지 않는 GridNode"):
         load_grid_dataset_from_csv(source_dir)
+
+
+def test_processed_grid_node_history_loader_validates_prediction_input(tmp_path):
+    path = tmp_path / "grid_node_load_history.csv"
+    rows = []
+    for hour in range(24):
+        rows.append(
+            {
+                "timestamp": f"2026-05-14 {hour:02d}:00:00",
+                "node_id": "TOWER_A",
+                "node_name": "A 송전탑",
+                "node_type": "transmission_tower",
+                "region": "테스트권",
+                "load_mw": 100.0 + hour,
+                "generation_mw": 0.0,
+                "net_injection_mw": -(100.0 + hour),
+                "load_weight": 1.0,
+                "generation_weight": 0.0,
+                "national_demand_mw": 1000.0,
+                "national_supply_mw": 1200.0,
+                "grid_total_load_mw": 100.0 + hour,
+                "grid_total_generation_mw": 120.0,
+                "scale_to_grid": 0.1,
+                "source": "unit-test",
+            }
+        )
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+    result = load_processed_grid_node_history(path)
+
+    assert len(result) == 24
+    assert result["timestamp"].nunique() == 24
+    assert result.attrs["source_path"].endswith("grid_node_load_history.csv")
+
+
+def test_processed_grid_line_flow_history_loader_and_summary(tmp_path):
+    path = tmp_path / "grid_line_flow_history.csv"
+    pd.DataFrame(
+        [
+            {
+                "timestamp": "2026-05-14 00:00:00",
+                "line_id": "GLINE_A_B",
+                "from_node_id": "TOWER_A",
+                "to_node_id": "TOWER_B",
+                "from_node_name": "A 송전탑",
+                "to_node_name": "B 송전탑",
+                "flow_mw": 50.0,
+                "abs_flow_mw": 50.0,
+                "capacity_mw": 100.0,
+                "utilization": 0.5,
+                "status": "normal",
+                "risk_level": "low",
+                "loss_mw": 0.1,
+                "from_angle_deg": 1.0,
+                "to_angle_deg": 0.0,
+                "angle_delta_deg": 1.0,
+                "slack_bus_id": "PLANT_A",
+                "reactance_pu": 0.1,
+                "line_status_source": "dc_power_flow_balanced_dispatch",
+                "source": "unit-line-history",
+            }
+        ]
+    ).to_csv(path, index=False)
+
+    result = load_processed_grid_line_flow_history(path)
+    summary = summarize_processed_grid_line_flow_history(path)
+
+    assert len(result) == 1
+    assert result.attrs["source_path"].endswith("grid_line_flow_history.csv")
+    assert summary["processed_line_history_used"] is True
+    assert summary["line_flow_history_rows"] == 1
+    assert summary["line_flow_history_max_utilization"] == 0.5
+
+
+def test_model_evaluation_summary_loader_validates_core_metrics(tmp_path):
+    path = tmp_path / "model_evaluation_summary.csv"
+    pd.DataFrame(
+        [
+            {
+                "model": "baseline",
+                "mae_mw": 22.0,
+                "rmse_mw": 31.0,
+                "mape_pct": 8.5,
+                "line_utilization_mae_pp": 3.4,
+                "sample_count": 48,
+            },
+            {
+                "model": "neural_gnn",
+                "mae_mw": 16.0,
+                "rmse_mw": 25.0,
+                "mape_pct": 6.0,
+                "line_utilization_mae_pp": 2.1,
+                "sample_count": 48,
+            },
+        ]
+    ).to_csv(path, index=False)
+
+    result = load_model_evaluation_summary(path)
+
+    assert result.attrs["source_path"].endswith("model_evaluation_summary.csv")
+    assert result["model"].tolist() == ["baseline", "neural_gnn"]
+    assert result["mape_pct"].tolist() == [8.5, 6.0]
